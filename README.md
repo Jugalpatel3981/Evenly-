@@ -45,6 +45,15 @@ password-reset emails then bring people back to your app.
 
 That's it. Open your link, create an account, confirm your email, and make a group.
 
+## Installing on phones
+Send friends your link. Then:
+- **Android (Chrome):** open the link and tap **Install app** when it pops up, or use the **⋮** menu > **Install app** / **Add to Home screen**.
+- **iPhone (Safari):** open the link, tap the **Share** button, then **Add to Home Screen**. (On iPhone, this only works from Safari.)
+- **Computer (Chrome or Edge):** click the install icon at the right of the address bar.
+
+Evenly then opens full-screen from its own icon, like any other app. Updates
+arrive automatically: friends never need to reinstall.
+
 ## How invites work
 When you add a friend to a group with their email, they're "invited". As soon
 as they sign up (or sign in) with that email and confirm it, the group appears
@@ -69,4 +78,4 @@ just can't sign in to see them.
 | `styles.css` | Look and feel (light and dark mode) |
 | `config.js` | Your Supabase URL and key |
 | `supabase/schema.sql` | Tables, security rules and functions |
-| `manifest.webmanifest`, `icon.svg` | Lets phones install it like an app |
+| `manifest.webmanifest`, `sw.js`, `icon-*.png` | Let phones install it like an app |
