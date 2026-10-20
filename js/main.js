@@ -5,7 +5,7 @@ import { validEmail, appUrl } from './util.js';
 import { $, toast, initSheet, busy, resizeImage, copyText } from './ui.js';
 import { renderSetup, renderAuth, renderRecovery, renderApp } from './views.js';
 import { openExpenseSheet, openPickSheet, expenseWithFriend, openExpenseDetail, openSettleSheet, openDeletedSheet,
-         restoreExpense, openGroupSheet, openFriendSheet, openJoinSheet, copySummary, sendReminder } from './sheets.js';
+         restoreExpense, openGroupSheet, openFriendSheet, openJoinSheet, openInviteSheet, copySummary, sendReminder } from './sheets.js';
 
 setToast(toast);
 initSheet();
@@ -202,6 +202,7 @@ $('#app').addEventListener('click', ev => {
     case 'push-on': enablePush().then(() => { ls.set('evenly.pushAsked', '1'); toast('Notifications are on for this device'); }, err => toast(friendly(err))).finally(refreshPush); break;
     case 'push-off': disablePush().then(() => toast('Notifications are off for this device'), err => toast(friendly(err))).finally(refreshPush); break;
     case 'push-later': ls.set('evenly.pushAsked', '1'); render(); break;
+    case 'invite': openInviteSheet(el.dataset.id); break;
     case 'remind': sendReminder(el.dataset.gid, el.dataset.member, el.dataset.amt, el.dataset.cur); break;
     case 'signout': sb.auth.signOut(); break;
     case 'copy-app': copyText(location.origin, 'Copy the Evenly link'); break;

@@ -207,3 +207,5 @@ code.grow{flex:1;min-width:0;overflow-wrap:anywhere;padding:8px 10px;border-radi
 .receipt img{max-width:100%;max-height:280px;object-fit:contain;border-radius:12px;border:1px solid var(--line);background:var(--bg);align-self:flex-start}
 a.btn{text-decoration:none;color:inherit}
 a.btn.primary{color:var(--accent-ink)}
+.invite-nudge{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.invite-nudge>span:first-of-type{flex:1 1 220px}

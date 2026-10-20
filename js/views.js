@@ -189,7 +189,9 @@ function renderGroup(g){
   if (!tabs.some(([k]) => k === S.tab)) S.tab = 'expenses';
   const header = g.is_direct
     ? `<div class="friend-head">${avatar(personName(f), avatarUrl(f), 'av xl')}<div><h1>${esc(titleOf(g))}</h1>
-        <p class="muted" style="margin:0">${f?.user_id ? 'On Evenly' : f?.email ? `Invited · ${esc(f.email)}` : 'Not on Evenly yet'}</p></div></div>`
+        <p class="muted" style="margin:0">${f?.user_id ? 'On Evenly' : f?.email ? `Invited · ${esc(f.email)}` : 'Not on Evenly yet'}</p></div></div>
+       ${f && !f.user_id ? `<div class="banner ok invite-nudge">${icon('user-plus', 18)}<span>${esc(personName(f))} won’t see these expenses or get notifications until they join. ${f.email ? 'They’ll be linked when they sign up with that email, or' : 'Add their email in settings, or'} send them an invite link.</span>
+         <span class="actions nowrap"><button class="btn sm primary" data-act="invite" data-id="${esc(g.id)}">${icon('share-2', 15)} Invite</button></span></div>` : ''}`
     : `${g.cover_url ? `<div class="cover"><img src="${esc(g.cover_url)}" alt=""></div>` : ''}
        <div class="group-title"><span class="av lg type-${t[0]}" aria-hidden="true">${icon(t[2], 20)}</span><h1>${esc(g.name)}</h1></div>
        <div class="chips">${membersOf(g.id).map(m => `<span class="chip">${esc(m.id === me ? 'You' : personName(m))}${m.user_id || m.id === me ? '' : ' <span class="muted">· not joined</span>'}</span>`).join('')}</div>`;
