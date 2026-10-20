@@ -1,7 +1,7 @@
 // Forms and detail panels that open in the bottom sheet.
 import { S, sb, uid, myName, defaultCurrency, run, loadAll, emit, friendly, ls, membersOf, expOf, member, nameOf,
          myId, friendOf, titleOf, personName, avatarUrl, myBalance, groupBalances, friendsIndex } from './state.js';
-import { esc, fmt, toMinor, fromMinor, today, niceDate, ago, validEmail, appUrl } from './util.js';
+import { esc, fmt, toMinor, fromMinor, today, niceDate, ago, validEmail, appUrl, curSymbol } from './util.js';
 import { computeSplit, computePayers, payersOf, curOf, simplify, pairwise } from './money.js';
 import { catOf, categoryOptions, guessCategory, GROUP_TYPES } from './categories.js';
 import { icon } from './icons.js';
@@ -55,6 +55,12 @@ function splitEditor({modeEl, rowsEl, hintEl, people, mode, inc, inputs, getTota
 }
 
 /* ---------- add / edit an expense in a group or friend ledger ---------- */
+// Full-screen, phone-app style: description and amount up top, a "Paid by you and split equally"
+// button that opens the details, and a toolbar for date, repeat, receipt and notes.
+const MODE_WORDS = {equal: 'equally', exact: 'by exact amounts', percent: 'by percentages', shares: 'by shares', adjust: 'with adjustments'};
+const dayLabel = d => d === today() ? 'Today' : new Date(d + 'T00:00').toLocaleDateString(undefined, {day: 'numeric', month: 'short'});
+const sheetBar = (title, save = 'Save') => `<div class="sheet-bar"><button type="button" class="btn ghost icon-btn" data-close aria-label="Close">${icon('x', 22)}</button>
+  <b>${title}</b>${save ? `<button class="btn ghost bar-save" type="submit">${save}</button>` : '<span></span>'}</div>`;
 export function openExpenseSheet(gid, eid){
   const g = S.groups[gid], e = eid ? S.expenses[eid] : null, members = membersOf(gid);
   const people = members.map(m => ({id: m.id, name: nameOf(gid, m.id)}));
@@ -62,32 +68,39 @@ export function openExpenseSheet(gid, eid){
   const payer = e?.paid_by || myId(gid) || members[0].id;
   const cur0 = e ? curOf(e, g) : g.currency;
   const mode0 = e?.split_mode || 'equal';
+  const cat0 = e?.category || 'general';
   let catTouched = !!e;
-  openSheet(`<form class="sheet-in" id="eForm" novalidate>${head(e ? 'Edit expense' : `Add expense ${g.is_direct ? 'with ' + esc(titleOf(g)) : 'in ' + esc(g.name)}`)}
-    <label class="f">What was it for?<input id="eDesc" maxlength="80" placeholder="Dinner at the beach shack" value="${esc(e?.description || '')}" ${e ? '' : 'autofocus'}></label>
-    <div class="grid2">
-      <label class="f">Amount<input id="eAmt" class="amount-input" inputmode="decimal" placeholder="0.00" value="${e ? fromMinor(Number(e.amount), cur0) : ''}"></label>
-      <label class="f">Currency<select id="eCur">${currencyOptions(cur0)}</select></label>
+  const withChip = g.is_direct ? `${avatar(titleOf(g), avatarUrl(friendOf(g.id)), 'av tiny')} ${esc(titleOf(g))}` : `${icon(GROUP_TYPES.find(t => t[0] === g.type)?.[2] || 'users', 15)} All of ${esc(g.name)}`;
+  openSheet(`<form class="sheet-in full-form" id="eForm" novalidate>${sheetBar(e ? 'Edit expense' : 'Add an expense')}
+    <div class="with-row">With <b>you</b> and: <span class="pchip static">${withChip}</span></div>
+    <div class="big-fields">
+      <div class="bf"><label class="sq-btn" id="catBtn" title="Category">${catIcon(cat0)}<select id="eCat" aria-label="Category">${categoryOptions(cat0)}</select></label>
+        <input id="eDesc" class="line-input" maxlength="80" placeholder="Enter a description" value="${esc(e?.description || '')}" ${e ? '' : 'autofocus'}></div>
+      <div class="bf"><label class="sq-btn cur" title="Currency"><span id="curSym">${esc(curSymbol(cur0))}</span><select id="eCur" aria-label="Currency">${currencyOptions(cur0)}</select></label>
+        <input id="eAmt" class="line-input amount" inputmode="decimal" placeholder="0.00" value="${e ? fromMinor(Number(e.amount), cur0) : ''}"></div>
+      <button type="button" class="pill" id="splitPill"></button>
+      <div class="per-person muted small" id="perPerson"></div>
     </div>
-    <div class="grid2">
+    <div id="splitPanel" class="split-panel" hidden>
       <label class="f">Paid by<select id="ePaid">${people.map(p => `<option value="${esc(p.id)}"${!multiPay && p.id === payer ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
         <option value="__multi"${multiPay ? ' selected' : ''}>Several people…</option></select></label>
-      <label class="f">Date<input id="eDate" type="date" value="${esc(e?.date || today())}"></label>
+      <div id="payBox" ${multiPay ? '' : 'hidden'}><div class="f-l">How much each person paid</div><div class="split-rows" id="payRows"></div><p class="hint" id="payHint"></p></div>
+      <div><div class="f-l">Split</div><div class="seg" id="eMode"></div></div>
+      <div class="split-rows" id="eRows"></div>
+      <button type="button" class="btn sm" id="splitDone" style="align-self:flex-end">Done</button>
     </div>
-    <div id="payBox" ${multiPay ? '' : 'hidden'}><div class="f-l">How much each person paid</div><div class="split-rows" id="payRows"></div><p class="hint" id="payHint"></p></div>
-    <div><div class="f-l">Split</div><div class="seg" id="eMode"></div></div>
-    <div class="split-rows" id="eRows"></div>
     <p class="hint" id="eHint"></p>
-    <div class="grid2">
-      <label class="f">Category<select id="eCat">${categoryOptions(e?.category || 'general')}</select></label>
-      <label class="f">Repeats<select id="eRep">${REPEATS.map(([k, l]) => `<option value="${k}"${(e?.repeat || 'never') === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+    <div id="notesBox" ${e?.notes ? '' : 'hidden'}><label class="f">Notes<textarea id="eNotes" rows="3" maxlength="1000" placeholder="What it covered, who booked it…">${esc(e?.notes || '')}</textarea></label></div>
+    <div class="muted small" id="rName">${e?.receipt_path ? `${icon('paperclip', 13)} A receipt is attached. <button type="button" class="linkbtn small" id="eReceiptRm">Remove</button>` : ''}</div>
+    ${e ? `<button type="button" class="btn danger" id="eDel" style="align-self:flex-start">${icon('trash-2', 16)} Delete expense</button>` : ''}
+    <div class="toolbar">
+      <label class="tool">${icon('calendar', 18)}<span id="dateLbl">${dayLabel(e?.date || today())}</span><input id="eDate" type="date" value="${esc(e?.date || today())}" aria-label="Date"></label>
+      <label class="tool">${icon('repeat', 18)}<span id="repLbl">${e?.repeat && e.repeat !== 'never' ? esc(REPEATS.find(r => r[0] === e.repeat)[1]) : 'Once'}</span><select id="eRep" aria-label="Repeats">${REPEATS.map(([k, l]) => `<option value="${k}"${(e?.repeat || 'never') === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+      <span class="sp"></span>
+      <label class="tool icon-only" title="Receipt photo">${icon('camera', 20)}<input type="file" id="eReceipt" accept="image/*" hidden></label>
+      <button type="button" class="tool icon-only" id="notesBtn" title="Notes">${icon('notebook-pen', 20)}</button>
     </div>
-    <label class="f">Notes<textarea id="eNotes" rows="2" maxlength="1000" placeholder="Optional: what it covered, who booked it…">${esc(e?.notes || '')}</textarea></label>
-    <div><div class="f-l">Receipt photo</div><div class="cover-edit" id="rBox"><span class="muted small" id="rName">${e?.receipt_path ? 'A receipt is attached' : 'No photo'}</span>
-      <label class="btn sm">${icon('paperclip', 15)} ${e?.receipt_path ? 'Replace' : 'Attach'}<input type="file" id="eReceipt" accept="image/*" hidden></label>
-      ${e?.receipt_path ? `<button type="button" class="btn sm ghost" id="eReceiptRm">Remove</button>` : ''}</div></div>
-    <div class="actions">${e ? `<button type="button" class="btn danger" id="eDel">${icon('trash-2', 16)} Delete</button>` : ''}<span class="sp"></span><button class="btn primary" type="submit">Save</button></div>
-  </form>`);
+  </form>`, {full: true});
   const cur = () => $('#eCur').value;
   const total = () => toMinor($('#eAmt').value, cur());
   const editor = splitEditor({
@@ -108,24 +121,40 @@ export function openExpenseSheet(gid, eid){
     payHint.className = 'hint ' + (r.error ? 'err' : 'ok'); payHint.textContent = r.error || 'Payments match the total';
     return r;
   };
+  // "Paid by you and split equally" and "(₹300.00/person)"
+  const pill = () => {
+    const pv = $('#ePaid').value, who = pv === '__multi' ? 'several people' : pv === myId(gid) ? 'you' : nameOf(gid, pv);
+    $('#splitPill').innerHTML = `Paid by <b>${esc(who)}</b> and split <b>${MODE_WORDS[editor.mode]}</b>`;
+    const r = editor.update(), n = r.split ? Object.keys(r.split).length : 0;
+    $('#perPerson').textContent = editor.mode === 'equal' && n && total() > 0 ? `(${fmt(Math.floor(total() / n), cur())}/person)` : '';
+  };
+  const setCat = k => { $('#catBtn').querySelector('.ico')?.replaceWith(document.createRange().createContextualFragment(catIcon(k))); };
   payRows.addEventListener('input', ev => { if (ev.target.dataset.pay) { payInputs[ev.target.dataset.pay] = ev.target.value; updatePay(); } });
-  $('#ePaid').addEventListener('change', () => { $('#payBox').hidden = $('#ePaid').value !== '__multi'; drawPay(); });
-  $('#eAmt').addEventListener('input', () => { editor.update(); updatePay(); });
-  $('#eCur').addEventListener('change', () => { editor.draw(); drawPay(); });
-  $('#eCat').addEventListener('change', () => { catTouched = true; });
-  $('#eDesc').addEventListener('input', () => { if (catTouched) return; const k = guessCategory($('#eDesc').value); if (k) $('#eCat').value = k; });
-  drawPay();
+  $('#ePaid').addEventListener('change', () => { $('#payBox').hidden = $('#ePaid').value !== '__multi'; drawPay(); pill(); });
+  $('#eAmt').addEventListener('input', () => { pill(); updatePay(); });
+  $('#eCur').addEventListener('change', () => { $('#curSym').textContent = curSymbol(cur()); editor.draw(); drawPay(); pill(); });
+  $('#eMode').addEventListener('click', () => setTimeout(pill));
+  $('#eRows').addEventListener('input', () => setTimeout(pill));
+  $('#eCat').addEventListener('change', () => { catTouched = true; setCat($('#eCat').value); });
+  $('#eDesc').addEventListener('input', () => { if (catTouched) return; const k = guessCategory($('#eDesc').value); if (k) { $('#eCat').value = k; setCat(k); } });
+  $('#splitPill').addEventListener('click', () => { $('#splitPanel').hidden = !$('#splitPanel').hidden; });
+  $('#splitDone').addEventListener('click', () => { $('#splitPanel').hidden = true; });
+  $('#notesBtn').addEventListener('click', () => { $('#notesBox').hidden = false; $('#eNotes').focus(); });
+  $('#eDate').addEventListener('change', () => { $('#dateLbl').textContent = dayLabel($('#eDate').value || today()); });
+  $('#eRep').addEventListener('change', () => { const v = $('#eRep').value; $('#repLbl').textContent = v === 'never' ? 'Once' : REPEATS.find(r => r[0] === v)[1]; });
+  drawPay(); pill();
   const receipt = {file: null, removed: false};
-  $('#eReceipt').addEventListener('change', ev => { receipt.file = ev.target.files[0] || null; if (receipt.file) $('#rName').textContent = receipt.file.name; });
-  $('#eReceiptRm')?.addEventListener('click', ev => { receipt.removed = true; receipt.file = null; $('#rName').textContent = 'Will be removed when you save'; ev.target.remove(); });
+  $('#eReceipt').addEventListener('change', ev => { receipt.file = ev.target.files[0] || null; if (receipt.file) $('#rName').innerHTML = `${icon('paperclip', 13)} ${esc(receipt.file.name)}`; });
+  $('#eReceiptRm')?.addEventListener('click', () => { receipt.removed = true; receipt.file = null; $('#rName').textContent = 'The receipt will be removed when you save.'; });
   if (e) armDelete($('#eDel'), async () => { if (await run(sb.from('expenses').delete().eq('id', e.id), 'Expense deleted. You can restore it from Activity.')) closeSheet(); });
   $('#eForm').addEventListener('submit', async ev => {
     ev.preventDefault();
     const hint = $('#eHint');
     const description = $('#eDesc').value.trim();
-    if (!description) { hint.className = 'hint err'; hint.textContent = 'Say what the expense was for.'; $('#eDesc').focus(); return; }
-    const r = editor.update(); if (r.error) { $('#eAmt').focus(); return; }
-    const p = updatePay(); if (p.error) return;
+    if (!description) { hint.className = 'hint err'; hint.textContent = 'Enter a description.'; $('#eDesc').focus(); return; }
+    if (!(total() > 0)) { hint.className = 'hint err'; hint.textContent = 'Enter an amount above zero.'; $('#eAmt').focus(); return; }
+    const r = editor.update(); if (r.error) { $('#splitPanel').hidden = false; return; }
+    const p = updatePay(); if (p.error) { $('#splitPanel').hidden = false; return; }
     const payers = p.payers;
     const paid_by = payers ? Object.entries(payers).sort((a, b) => b[1] - a[1])[0][0] : $('#ePaid').value;
     const row = {group_id: g.id, kind: 'expense', description, amount: total(), paid_by, payers: payers && Object.keys(payers).length > 1 ? payers : null,
@@ -282,30 +311,40 @@ export async function openExpenseDetail(eid){
   const g = S.groups[e.group_id], cur = curOf(e, g), me = myId(g.id);
   const isPay = e.kind === 'payment';
   const payers = payersOf(e);
-  const created = S.activity.find(a => a.expense_id === e.id && (a.kind === 'expense_added' || a.kind === 'expense_recurring'));
-  const lines = isPay
-    ? `<div class="row static">${payIcon()}<span class="main"><span class="title">${esc(nameOf(g.id, e.paid_by))} paid ${esc(nameOf(g.id, Object.keys(e.split)[0]))}</span></span><span class="amt"><b>${fmt(Number(e.amount), cur)}</b></span></div>`
-    : Object.entries(payers).map(([id, v]) => `<div class="row static">${avatar(personName(member(g.id, id)), avatarUrl(member(g.id, id)))}<span class="main"><span class="title">${esc(nameOf(g.id, id))} paid ${fmt(Number(v), cur)}</span></span></div>`).join('')
-      + Object.entries(e.split).map(([id, v]) => `<div class="row static indent">${avatar(personName(member(g.id, id)), avatarUrl(member(g.id, id)))}<span class="main"><span class="title">${esc(nameOf(g.id, id))} ${id === me ? 'owe' : 'owes'} ${fmt(Number(v), cur)}</span></span></div>`).join('');
-  const b = openSheet(`<div class="sheet-in">${head(isPay ? 'Payment' : esc(e.description))}
-    <div class="detail-top">${isPay ? payIcon() : catIcon(e.category)}<div><div class="big num">${fmt(Number(e.amount), cur)}</div>
-      <div class="muted small">${esc(niceDate(e.date))}${isPay ? '' : ` · ${esc(catOf(e.category).label)}`} · ${esc(g.is_direct ? 'with ' + titleOf(g) : g.name)}</div>
-      ${created ? `<div class="muted small">Added by ${esc(whoDid(g.id, created.actor))}, ${esc(ago(created.created_at))}</div>` : ''}</div></div>
+  const hist = S.activity.filter(a => a.expense_id === e.id);
+  const created = hist.find(a => a.kind === 'expense_added' || a.kind === 'expense_recurring');
+  const updated = hist.find(a => a.kind === 'expense_updated');
+  const who = id => nameOf(g.id, id), av = id => avatar(personName(member(g.id, id)), avatarUrl(member(g.id, id)), 'av sm');
+  const tree = isPay
+    ? `<div class="payer">${av(e.paid_by)}<b>${esc(who(e.paid_by))} paid ${esc(who(Object.keys(e.split)[0]))} ${fmt(Number(e.amount), cur)}</b></div>`
+    : Object.entries(payers).map(([id, v]) => `<div class="payer">${av(id)}<b>${esc(who(id))} paid ${fmt(Number(v), cur)}</b></div>`).join('')
+      + `<div class="tree">${Object.entries(e.split).map(([id, v]) => `<div class="tree-line">${av(id)}<span>${esc(who(id))} ${id === me ? 'owe' : 'owes'} ${fmt(Number(v), cur)}</span></div>`).join('')}</div>`;
+  const b = openSheet(`<div class="sheet-in full-form">
+    <div class="sheet-bar"><button type="button" class="btn ghost icon-btn" data-close aria-label="Close">${icon('chevron-left', 24)}</button><b>Details</b>
+      <span class="actions nowrap"><button class="btn ghost icon-btn" id="dDel" aria-label="Delete">${icon('trash-2', 20)}</button><button class="btn ghost icon-btn" id="dEdit" aria-label="Edit">${icon('pencil', 20)}</button></span></div>
+    <div class="detail-head">
+      ${isPay ? payIcon() : catIcon(e.category)}
+      <div class="dh-main"><div class="dh-title">${esc(isPay ? 'Payment' : e.description)}</div><div class="big num">${fmt(Number(e.amount), cur)}</div>
+        <span class="pchip static">${g.is_direct ? `${icon('user', 14)} ${esc(titleOf(g))}` : `${icon(GROUP_TYPES.find(t => t[0] === g.type)?.[2] || 'users', 14)} ${esc(g.name)}`}</span>
+        <div class="muted small">${esc(niceDate(e.date))}</div>
+        ${created ? `<div class="muted small">Added by ${esc(whoDid(g.id, created.actor).replace(/^You$/, 'you'))} on ${esc(niceDate(created.created_at.slice(0, 10)))}</div>` : ''}
+        ${updated ? `<div class="muted small">Last updated by ${esc(whoDid(g.id, updated.actor).replace(/^You$/, 'you'))} on ${esc(niceDate(updated.created_at.slice(0, 10)))}</div>` : ''}</div>
+      ${e.receipt_path ? `<a class="receipt-thumb" id="dReceipt" target="_blank" rel="noopener" aria-label="Open receipt">${icon('receipt', 20)}</a>` : ''}
+    </div>
     ${e.repeat && e.repeat !== 'never' ? `<div class="banner ok">${icon('repeat', 15)} Repeats ${esc(REPEATS.find(r => r[0] === e.repeat)[1].toLowerCase())}${e.next_date ? `. Next on ${esc(niceDate(e.next_date))}.` : ''}</div>` : ''}
     ${e.repeat_parent ? `<div class="muted small">${icon('repeat', 13)} Added automatically from a repeating expense.</div>` : ''}
     ${e.bill ? `<div class="muted small">${icon('users', 13)} Part of a ${fmt(Number(e.bill.total), cur)} bill with ${esc((e.bill.people || []).join(', '))}.</div>` : ''}
-    <div class="list">${lines}</div>
+    <div class="detail-tree">${tree}</div>
     ${e.notes ? `<div class="notes">${esc(e.notes)}</div>` : ''}
-    ${e.receipt_path ? `<a class="receipt" id="dReceipt" target="_blank" rel="noopener">${icon('receipt', 15)} Loading receipt…</a>` : ''}
-    <div class="actions"><button class="btn" id="dEdit">${icon('pencil', 15)} Edit</button><button class="btn danger" id="dDel">${icon('trash-2', 15)} Delete</button></div>
-    <h3 style="margin:6px 0 -6px">${icon('message-square', 14)} Comments</h3>
+    ${isPay ? '' : categoryChart(g, e, cur)}
+    <h3 class="sec-h">${icon('message-square', 14)} Comments</h3>
     <div class="list" id="cList"><div class="row static muted">Loading…</div></div>
     <form id="cForm" class="inline-form"><label class="f" style="flex:1"><span class="sr">Add a comment</span><input id="cBody" maxlength="1000" placeholder="Add a comment"></label><button class="btn" type="submit">${icon('send', 15)}<span class="sr">Post</span></button></form>
-    <h3 style="margin:6px 0 -6px">${icon('history', 14)} History</h3>
+    <h3 class="sec-h">${icon('history', 14)} History</h3>
     <div class="list" id="hList"><div class="row static muted">Loading…</div></div>
-  </div>`);
+  </div>`, {full: true});
   $('#dEdit').addEventListener('click', () => isPay ? openSettleSheet(g.id, {id: e.id}) : openExpenseSheet(g.id, e.id));
-  armDelete($('#dDel'), async () => { if (await run(sb.from('expenses').delete().eq('id', e.id), 'Deleted. You can restore it from Activity.')) closeSheet(); });
+  armDelete($('#dDel'), async () => { if (await run(sb.from('expenses').delete().eq('id', e.id), 'Deleted. You can restore it from Activity.')) closeSheet(); }, 'Tap again');
   const loadComments = async () => {
     const {data, error} = await sb.from('comments').select('*').eq('expense_id', e.id).order('created_at');
     const list = $('#cList'); if (!list) return;
@@ -342,9 +381,20 @@ export async function openExpenseDetail(eid){
   loadComments(); loadHistory();
   if (e.receipt_path) sb.storage.from('receipts').createSignedUrl(e.receipt_path, 3600).then(({data, error}) => {
     const a = $('#dReceipt'); if (!a) return;
-    if (error) { a.textContent = 'Couldn’t load the receipt.'; return; }
-    a.href = data.signedUrl; a.innerHTML = `<img src="${esc(data.signedUrl)}" alt="Receipt photo"><span>${icon('external-link', 14)} Open full size</span>`;
+    if (error) { a.title = 'Couldn’t load the receipt.'; return; }
+    a.href = data.signedUrl; a.innerHTML = `<img src="${esc(data.signedUrl)}" alt="Receipt photo">`;
   });
+}
+// Spending in this expense's category in this group, for the three months up to it.
+function categoryChart(g, e, cur){
+  const c = catOf(e.category), end = new Date(e.date + 'T00:00');
+  const months = [2, 1, 0].map(k => { const d = new Date(end.getFullYear(), end.getMonth() - k, 1); return {key: d.toISOString().slice(0, 7), label: d.toLocaleDateString(undefined, {month: 'long'}), v: 0}; });
+  expOf(g.id).forEach(x => { if (x.kind === 'payment' || catOf(x.category).key !== c.key || curOf(x, g) !== cur) return;
+    const m = months.find(mm => mm.key === x.date.slice(0, 7)); if (m) m.v += Number(x.amount); });
+  const max = Math.max(1, ...months.map(m => m.v));
+  return `<div class="cat-chart"><h3 class="sec-h">Spending by category</h3>
+    <div class="muted small">${esc(g.is_direct ? titleOf(g) : g.name)} :: ${esc(c.label)}</div>
+    ${months.map(m => `<div class="cc-row"><span>${esc(m.label)}</span><span class="cc-bar" style="--c:var(--c-${c.color})"><i style="width:${(m.v / max * 100).toFixed(1)}%"></i></span><span class="num">${fmt(m.v, cur)}</span></div>`).join('')}</div>`;
 }
 
 /* ---------- settle up ---------- */
@@ -361,18 +411,33 @@ export function openSettleSheet(gid, pre = {}){
   if (!to) to = members.find(m => m.id !== from)?.id;
   cur = cur || g.currency;
   const sel = (id, val) => `<select id="${id}">${members.map(m => `<option value="${esc(m.id)}"${m.id === val ? ' selected' : ''}>${esc(nameOf(gid, m.id))}</option>`).join('')}</select>`;
-  openSheet(`<form class="sheet-in" id="pForm" novalidate>${head(p ? 'Edit payment' : 'Record a payment')}
-    <div class="grid2"><label class="f">Who paid${sel('pFrom', from)}</label><label class="f">Paid to${sel('pTo', to)}</label></div>
-    <div class="grid2"><label class="f">Amount<input id="pAmt" class="amount-input" inputmode="decimal" placeholder="0.00" value="${amt ? fromMinor(amt, cur) : ''}" autofocus></label>
-    <label class="f">Currency<select id="pCur">${currencyOptions(cur)}</select></label></div>
-    <label class="f">Date<input id="pDate" type="date" value="${esc(p?.date || today())}"></label>
+  openSheet(`<form class="sheet-in full-form" id="pForm" novalidate>${sheetBar(p ? 'Edit payment' : 'Settle up')}
+    <div class="settle-hero" id="pHero"></div>
+    <p class="settle-text"><span id="pText"></span> <button type="button" class="linkbtn small" id="pChange">Change</button></p>
+    <div class="grid2" id="pPeople" hidden><label class="f">Who paid${sel('pFrom', from)}</label><label class="f">Paid to${sel('pTo', to)}</label></div>
+    <div class="big-fields center"><div class="bf"><label class="sq-btn cur" title="Currency"><span id="pSym">${esc(curSymbol(cur))}</span><select id="pCur" aria-label="Currency">${currencyOptions(cur)}</select></label>
+      <input id="pAmt" class="line-input amount" inputmode="decimal" placeholder="0.00" value="${amt ? fromMinor(amt, cur) : ''}"></div></div>
     <div id="payLinks"></div>
-    <p class="hint muted small">Record cash, UPI or bank transfers here once the money has actually moved.</p>
+    <p class="hint muted small" style="text-align:center">Record cash, UPI or bank transfers here once the money has actually moved.</p>
     <p class="hint err" id="pHint"></p>
-    <div class="actions">${p ? `<button type="button" class="btn danger" id="pDel">${icon('trash-2', 15)} Delete</button>` : ''}<span class="sp"></span><button class="btn primary" type="submit">Save payment</button></div>
-  </form>`);
+    ${p ? `<button type="button" class="btn danger" id="pDel" style="align-self:flex-start">${icon('trash-2', 15)} Delete payment</button>` : ''}
+    <div class="toolbar">
+      <label class="tool">${icon('calendar', 18)}<span id="pDateLbl">${dayLabel(p?.date || today())}</span><input id="pDate" type="date" value="${esc(p?.date || today())}" aria-label="Date"></label>
+      <span class="tool static">${icon(g.is_direct ? 'user' : 'users', 18)} ${esc(g.is_direct ? 'No group' : g.name)}</span>
+    </div>
+  </form>`, {full: true});
+  const hero = () => {
+    const f = $('#pFrom').value, t = $('#pTo').value, fm = member(gid, f), tm = member(gid, t);
+    $('#pHero').innerHTML = `${avatar(personName(fm), avatarUrl(fm), 'av lgc')}<span class="arrow">${icon('arrow-right', 28)}</span>${avatar(personName(tm), avatarUrl(tm), 'av lgc')}`;
+    const tn = nameOf(gid, t);
+    $('#pText').innerHTML = `<b>${esc(nameOf(gid, f))}</b> paid <b>${esc(tn === 'You' ? 'you' : tn)}</b>`;
+  };
+  $('#pChange').addEventListener('click', () => { $('#pPeople').hidden = !$('#pPeople').hidden; });
+  $('#pDate').addEventListener('change', () => { $('#pDateLbl').textContent = dayLabel($('#pDate').value || today()); });
+  $('#pCur').addEventListener('change', () => { $('#pSym').textContent = curSymbol($('#pCur').value); });
   if (p) armDelete($('#pDel'), async () => { if (await run(sb.from('expenses').delete().eq('id', p.id), 'Payment deleted')) closeSheet(); });
   const links = () => {
+    hero();
     const box = $('#payLinks'); if (!box) return;
     const f = $('#pFrom').value, t = $('#pTo').value, c = $('#pCur').value, a = toMinor($('#pAmt').value, c);
     const to = member(gid, t), prof = to?.user_id ? S.profiles[to.user_id] : null;
@@ -381,8 +446,8 @@ export function openSettleSheet(gid, pre = {}){
     if (prof.upi_id && c === 'INR') out.push(`<a class="btn primary" href="upi://pay?pa=${encodeURIComponent(prof.upi_id)}&pn=${encodeURIComponent(name)}&am=${amt}&cu=INR&tn=${encodeURIComponent('Evenly: ' + (g.is_direct ? 'settle up' : g.name))}">${icon('smartphone', 16)} Pay ${fmt(a, c)} with UPI</a>`);
     if (prof.paypal_me) out.push(`<a class="btn" target="_blank" rel="noopener" href="https://paypal.me/${encodeURIComponent(prof.paypal_me)}/${amt}${c}">${icon('credit-card', 16)} PayPal</a>`);
     if (prof.venmo && c === 'USD') out.push(`<a class="btn" target="_blank" rel="noopener" href="https://venmo.com/${encodeURIComponent(prof.venmo)}?txn=pay&amount=${amt}&note=${encodeURIComponent('Evenly')}">${icon('credit-card', 16)} Venmo</a>`);
-    box.innerHTML = out.length ? `<div class="actions">${out.join('')}</div><p class="hint muted small">Opens your payment app with ${esc(name)}’s details filled in. Come back and tap Save payment once it’s done.</p>` : '';
-    if (prof.upi_id && c === 'INR') box.insertAdjacentHTML('beforeend', `<p class="hint muted small">UPI ID: <code>${esc(prof.upi_id)}</code></p>`);
+    box.innerHTML = out.length ? `<div class="actions center">${out.join('')}</div><p class="hint muted small" style="text-align:center">Opens your payment app with ${esc(name)}’s details filled in. Come back and tap Save once it’s done.</p>` : '';
+    if (prof.upi_id && c === 'INR') box.insertAdjacentHTML('beforeend', `<p class="hint muted small" style="text-align:center">UPI ID: <code>${esc(prof.upi_id)}</code></p>`);
   };
   ['#pFrom', '#pTo', '#pCur'].forEach(sel => $(sel).addEventListener('change', links));
   $('#pAmt').addEventListener('input', links);
@@ -390,7 +455,7 @@ export function openSettleSheet(gid, pre = {}){
   $('#pForm').addEventListener('submit', async ev => {
     ev.preventDefault();
     const f = $('#pFrom').value, t = $('#pTo').value, c = $('#pCur').value, a = toMinor($('#pAmt').value, c), h = $('#pHint');
-    if (f === t) { h.textContent = 'Pick two different people.'; return; }
+    if (f === t) { h.textContent = 'Pick two different people.'; $('#pPeople').hidden = false; return; }
     if (!(a > 0)) { h.textContent = 'Enter an amount above zero.'; return; }
     const row = {group_id: g.id, kind: 'payment', description: 'Payment', amount: a, paid_by: f, payers: null, split: {[t]: a},
       split_mode: 'exact', split_input: {}, category: 'general', currency: c, date: $('#pDate').value || today()};
@@ -721,4 +786,40 @@ function openFindFriendSheet(then){
       if (then) then(id); else go('group', {gid: id, tab: 'expenses'});
       toast(m.user ? (known.has(m.user) ? `You and ${m.name} are already friends` : `Connected with ${m.name}`) : `${m.name} added. They’re connected when they sign up with ${m.email}.`);
     }});
+}
+
+/* ---------- search everything ---------- */
+export function openSearchSheet(){
+  const b = openSheet(`<div class="sheet-in">${head('Search')}
+    <input id="qIn" placeholder="Friends, groups or expenses" autocomplete="off" autofocus>
+    <div id="qOut"></div></div>`);
+  const out = b.querySelector('#qOut');
+  const draw = () => {
+    const q = $('#qIn').value.trim().toLowerCase();
+    if (q.length < 1) { out.innerHTML = ''; return; }
+    const friends = [...friendsIndex().values()].filter(f => f.name.toLowerCase().includes(q)).slice(0, 6);
+    const groups = Object.values(S.groups).filter(g => !g.is_direct && g.name.toLowerCase().includes(q)).slice(0, 6);
+    const exps = Object.values(S.expenses).filter(e => (e.kind === 'payment' ? 'payment' : (e.description || '')).toLowerCase().includes(q) || (e.notes || '').toLowerCase().includes(q))
+      .sort((a, c) => String(c.date).localeCompare(String(a.date))).slice(0, 20);
+    const sec = (t, rows) => rows ? `<h3 class="sec-h">${t}</h3><div class="list">${rows}</div>` : '';
+    out.innerHTML = sec('Friends', friends.map(f => `<button class="row" data-q-friend="${esc(f.key)}">${avatar(f.name, f.userId && S.profiles[f.userId]?.avatar_url)}<span class="main"><span class="title">${esc(f.name)}</span></span></button>`).join(''))
+      + sec('Groups', groups.map(g => `<button class="row" data-q-group="${esc(g.id)}"><span class="av">${icon(GROUP_TYPES.find(t => t[0] === g.type)?.[2] || 'users')}</span><span class="main"><span class="title">${esc(g.name)}</span></span></button>`).join(''))
+      + sec('Expenses', exps.map(e => { const g = S.groups[e.group_id]; return `<button class="row" data-q-exp="${esc(e.id)}">${e.kind === 'payment' ? payIcon() : catIcon(e.category)}<span class="main"><span class="title">${esc(e.kind === 'payment' ? 'Payment' : e.description)}</span><span class="sub">${esc(niceDate(e.date))} · ${esc(g ? titleOf(g) : '')}</span></span><span class="amt"><b>${fmt(Number(e.amount), curOf(e, g))}</b></span></button>`; }).join(''))
+      || `<p class="muted">Nothing matches “${esc($('#qIn').value.trim())}”.</p>`;
+  };
+  $('#qIn').addEventListener('input', draw);
+  out.addEventListener('click', ev => {
+    const r = ev.target.closest('.row'); if (!r) return;
+    if (r.dataset.qFriend) { closeSheet(); document.querySelector('#app').dispatchEvent(new CustomEvent('evenly-open', {detail: {friend: r.dataset.qFriend}})); }
+    else if (r.dataset.qGroup) { closeSheet(); go('group', {gid: r.dataset.qGroup, tab: 'expenses'}); }
+    else if (r.dataset.qExp) { const e = S.expenses[r.dataset.qExp]; go('group', {gid: e.group_id, tab: 'expenses'}); openExpenseDetail(e.id); }
+  });
+}
+
+/* ---------- filter the Friends and Groups lists ---------- */
+export function openFilterSheet(){
+  const opts = [['all', 'All'], ['outstanding', 'Outstanding balances'], ['owe', 'People you owe'], ['owed', 'People who owe you']];
+  const b = openSheet(`<div class="sheet-in">${head('Show')}<div class="list">${opts.map(([k, l]) => `<button class="row" data-f="${k}">
+    <span class="main"><span class="title">${l}</span></span>${S.filter === k ? `<span class="pos">${icon('check', 18)}</span>` : ''}</button>`).join('')}</div></div>`);
+  b.querySelectorAll('[data-f]').forEach(x => x.addEventListener('click', () => { S.filter = x.dataset.f; closeSheet(); emit(); }));
 }

@@ -1,6 +1,6 @@
 // Evenly service worker: makes the app installable and lets it open without a connection.
 // Network first, so friends always get the latest version; the cache is only a fallback.
-const CACHE = 'evenly-v5';
+const CACHE = 'evenly-v6';
 const SHELL = ['./', 'index.html', 'styles.css', 'config.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'vendor/qrcode.js',
   'js/main.js', 'js/state.js', 'js/views.js', 'js/sheets.js', 'js/ui.js', 'js/money.js', 'js/util.js', 'js/categories.js', 'js/icons.js', 'js/messages.js', 'js/push.js'];
 

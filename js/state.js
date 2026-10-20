@@ -25,7 +25,7 @@ export const S = {
   session: null, ready: false, recovery: false,
   groups: {}, members: {}, expenses: {}, profiles: {}, activity: [], notifications: [],
   view: 'home', gid: null, fkey: null, tab: 'expenses', authMode: 'signin',
-  homeTab: ls.get('evenly.homeTab', 'friends'),
+  homeTab: ls.get('evenly.homeTab', 'friends'), actTab: 'all', filter: 'all',
   pendingInvite: ls.get('evenly.invite', null),
 };
 

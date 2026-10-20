@@ -14,7 +14,9 @@ export function toast(msg){
 
 /* ---------- sheets ---------- */
 const sheet = () => $('#sheet'), body = () => $('#sheetBody');
-export function openSheet(html){
+export function openSheet(html, {full = false} = {}){
+  // Full-screen pages (add expense, settle up, details) fill a phone screen; others are a card.
+  sheet().classList.toggle('full', full);
   body().innerHTML = html;
   if (!sheet().open) sheet().showModal();
   body().scrollTop = 0;

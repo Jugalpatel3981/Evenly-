@@ -59,3 +59,9 @@ export function fmtMulti(map){
   const parts = Object.entries(map || {}).filter(([, v]) => v).map(([c, v]) => fmt(v, c));
   return parts.join(' + ');
 }
+
+// "₹", "$", "€"… for a currency, for the small currency button.
+export function curSymbol(cur){
+  try { return new Intl.NumberFormat(cur === 'INR' ? 'en-IN' : 'en-US', {style: 'currency', currency: cur}).formatToParts(0).find(p => p.type === 'currency')?.value || cur; }
+  catch { return cur; }
+}
