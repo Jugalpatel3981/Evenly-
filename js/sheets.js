@@ -83,6 +83,9 @@ export function openExpenseSheet(gid, eid){
       <label class="f">Repeats<select id="eRep">${REPEATS.map(([k, l]) => `<option value="${k}"${(e?.repeat || 'never') === k ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
     </div>
     <label class="f">Notes<textarea id="eNotes" rows="2" maxlength="1000" placeholder="Optional: what it covered, who booked it…">${esc(e?.notes || '')}</textarea></label>
+    <div><div class="f-l">Receipt photo</div><div class="cover-edit" id="rBox"><span class="muted small" id="rName">${e?.receipt_path ? 'A receipt is attached' : 'No photo'}</span>
+      <label class="btn sm">${icon('paperclip', 15)} ${e?.receipt_path ? 'Replace' : 'Attach'}<input type="file" id="eReceipt" accept="image/*" hidden></label>
+      ${e?.receipt_path ? `<button type="button" class="btn sm ghost" id="eReceiptRm">Remove</button>` : ''}</div></div>
     <div class="actions">${e ? `<button type="button" class="btn danger" id="eDel">${icon('trash-2', 16)} Delete</button>` : ''}<span class="sp"></span><button class="btn primary" type="submit">Save</button></div>
   </form>`);
   const cur = () => $('#eCur').value;
@@ -112,6 +115,9 @@ export function openExpenseSheet(gid, eid){
   $('#eCat').addEventListener('change', () => { catTouched = true; });
   $('#eDesc').addEventListener('input', () => { if (catTouched) return; const k = guessCategory($('#eDesc').value); if (k) $('#eCat').value = k; });
   drawPay();
+  const receipt = {file: null, removed: false};
+  $('#eReceipt').addEventListener('change', ev => { receipt.file = ev.target.files[0] || null; if (receipt.file) $('#rName').textContent = receipt.file.name; });
+  $('#eReceiptRm')?.addEventListener('click', ev => { receipt.removed = true; receipt.file = null; $('#rName').textContent = 'Will be removed when you save'; ev.target.remove(); });
   if (e) armDelete($('#eDel'), async () => { if (await run(sb.from('expenses').delete().eq('id', e.id), 'Expense deleted. You can restore it from Activity.')) closeSheet(); });
   $('#eForm').addEventListener('submit', async ev => {
     ev.preventDefault();
@@ -126,7 +132,13 @@ export function openExpenseSheet(gid, eid){
       split: r.split, split_mode: editor.mode, split_input: editor.input, category: $('#eCat').value, date: $('#eDate').value || today(),
       currency: cur(), notes: $('#eNotes').value.trim(), repeat: $('#eRep').value};
     busy(ev.target, true);
-    const ok = await run(e ? sb.from('expenses').update(row).eq('id', e.id) : sb.from('expenses').insert(row), e ? 'Expense updated' : 'Expense added');
+    const id = e ? e.id : crypto.randomUUID();
+    if (receipt.file) {
+      try { row.receipt_path = await uploadReceipt(g.id, id, receipt.file); }
+      catch (err) { busy(ev.target, false); toast(friendly(err)); return; }
+    } else if (receipt.removed) row.receipt_path = null;
+    const ok = await run(e ? sb.from('expenses').update(row).eq('id', e.id) : sb.from('expenses').insert({...row, id}), e ? 'Expense updated' : 'Expense added');
+    if (ok && e?.receipt_path && (receipt.file || receipt.removed)) sb.storage.from('receipts').remove([e.receipt_path]);
     busy(ev.target, false);
     if (ok) closeSheet();
   });
@@ -284,6 +296,7 @@ export async function openExpenseDetail(eid){
     ${e.bill ? `<div class="muted small">${icon('users', 13)} Part of a ${fmt(Number(e.bill.total), cur)} bill with ${esc((e.bill.people || []).join(', '))}.</div>` : ''}
     <div class="list">${lines}</div>
     ${e.notes ? `<div class="notes">${esc(e.notes)}</div>` : ''}
+    ${e.receipt_path ? `<a class="receipt" id="dReceipt" target="_blank" rel="noopener">${icon('receipt', 15)} Loading receipt…</a>` : ''}
     <div class="actions"><button class="btn" id="dEdit">${icon('pencil', 15)} Edit</button><button class="btn danger" id="dDel">${icon('trash-2', 15)} Delete</button></div>
     <h3 style="margin:6px 0 -6px">${icon('message-square', 14)} Comments</h3>
     <div class="list" id="cList"><div class="row static muted">Loading…</div></div>
@@ -327,6 +340,11 @@ export async function openExpenseDetail(eid){
     if (ok) { $('#cBody').value = ''; loadComments(); }
   });
   loadComments(); loadHistory();
+  if (e.receipt_path) sb.storage.from('receipts').createSignedUrl(e.receipt_path, 3600).then(({data, error}) => {
+    const a = $('#dReceipt'); if (!a) return;
+    if (error) { a.textContent = 'Couldn’t load the receipt.'; return; }
+    a.href = data.signedUrl; a.innerHTML = `<img src="${esc(data.signedUrl)}" alt="Receipt photo"><span>${icon('external-link', 14)} Open full size</span>`;
+  });
 }
 
 /* ---------- settle up ---------- */
@@ -348,11 +366,27 @@ export function openSettleSheet(gid, pre = {}){
     <div class="grid2"><label class="f">Amount<input id="pAmt" class="amount-input" inputmode="decimal" placeholder="0.00" value="${amt ? fromMinor(amt, cur) : ''}" autofocus></label>
     <label class="f">Currency<select id="pCur">${currencyOptions(cur)}</select></label></div>
     <label class="f">Date<input id="pDate" type="date" value="${esc(p?.date || today())}"></label>
+    <div id="payLinks"></div>
     <p class="hint muted small">Record cash, UPI or bank transfers here once the money has actually moved.</p>
     <p class="hint err" id="pHint"></p>
     <div class="actions">${p ? `<button type="button" class="btn danger" id="pDel">${icon('trash-2', 15)} Delete</button>` : ''}<span class="sp"></span><button class="btn primary" type="submit">Save payment</button></div>
   </form>`);
   if (p) armDelete($('#pDel'), async () => { if (await run(sb.from('expenses').delete().eq('id', p.id), 'Payment deleted')) closeSheet(); });
+  const links = () => {
+    const box = $('#payLinks'); if (!box) return;
+    const f = $('#pFrom').value, t = $('#pTo').value, c = $('#pCur').value, a = toMinor($('#pAmt').value, c);
+    const to = member(gid, t), prof = to?.user_id ? S.profiles[to.user_id] : null;
+    if (f !== me || !prof || !(a > 0)) { box.innerHTML = ''; return; }
+    const amt = fromMinor(a, c), name = personName(to), out = [];
+    if (prof.upi_id && c === 'INR') out.push(`<a class="btn primary" href="upi://pay?pa=${encodeURIComponent(prof.upi_id)}&pn=${encodeURIComponent(name)}&am=${amt}&cu=INR&tn=${encodeURIComponent('Evenly: ' + (g.is_direct ? 'settle up' : g.name))}">${icon('smartphone', 16)} Pay ${fmt(a, c)} with UPI</a>`);
+    if (prof.paypal_me) out.push(`<a class="btn" target="_blank" rel="noopener" href="https://paypal.me/${encodeURIComponent(prof.paypal_me)}/${amt}${c}">${icon('credit-card', 16)} PayPal</a>`);
+    if (prof.venmo && c === 'USD') out.push(`<a class="btn" target="_blank" rel="noopener" href="https://venmo.com/${encodeURIComponent(prof.venmo)}?txn=pay&amount=${amt}&note=${encodeURIComponent('Evenly')}">${icon('credit-card', 16)} Venmo</a>`);
+    box.innerHTML = out.length ? `<div class="actions">${out.join('')}</div><p class="hint muted small">Opens your payment app with ${esc(name)}’s details filled in. Come back and tap Save payment once it’s done.</p>` : '';
+    if (prof.upi_id && c === 'INR') box.insertAdjacentHTML('beforeend', `<p class="hint muted small">UPI ID: <code>${esc(prof.upi_id)}</code></p>`);
+  };
+  ['#pFrom', '#pTo', '#pCur'].forEach(sel => $(sel).addEventListener('change', links));
+  $('#pAmt').addEventListener('input', links);
+  links();
   $('#pForm').addEventListener('submit', async ev => {
     ev.preventDefault();
     const f = $('#pFrom').value, t = $('#pTo').value, c = $('#pCur').value, a = toMinor($('#pAmt').value, c), h = $('#pHint');
@@ -604,4 +638,19 @@ export function copySummary(g){
   }
   const text = `${g.is_direct ? `You and ${titleOf(g)}` : g.name}: who owes whom\n` + (lines.join('\n') || 'Everyone is settled up.') + `\n\nSee the details: ${appUrl()}`;
   copyText(text, 'Copy this summary');
+}
+
+/* ---------- receipts ---------- */
+async function uploadReceipt(gid, expenseId, file){
+  const blob = await resizeImage(file, 1800);
+  const path = `${gid}/${expenseId}-${Date.now()}.jpg`;
+  const {error} = await sb.storage.from('receipts').upload(path, blob, {contentType: 'image/jpeg', upsert: true});
+  if (error) throw error;
+  return path;
+}
+
+/* ---------- reminders ---------- */
+export async function sendReminder(gid, mid, amount, cur){
+  const ok = await run(sb.rpc('send_reminder', {p_group: gid, p_member: mid, p_amount: Number(amount), p_currency: cur}));
+  if (ok) toast(`Reminder sent to ${nameOf(gid, mid)}`);
 }

@@ -15,6 +15,13 @@ payments to settle up.
 - Simplified debts (fewest payments), switchable per group
 - Each friend's balance across every group you share
 
+**Notifications and payments**
+- Everyone in an expense is told when it's added, changed or deleted, commented on or paid, except whoever did it
+- Phone notifications, email, and a bell with unread count in the app
+- Remind someone who owes you (once a day)
+- Receipt photos on expenses (private to the group)
+- Pay with UPI, PayPal or Venmo straight from Settle up
+
 **Together**
 - Notes and comments on expenses
 - Full change history, and restoring deleted expenses
@@ -88,8 +95,22 @@ and your data stays.
   under **Authentication > Sign In / Providers > Email**. Leave it on for
   real use: invites only link to confirmed emails.
 
+## Notifications setup
+Notifications are created in the database and delivered by the `notify` Edge Function
+(`supabase/functions/notify/index.ts`).
+1. Run `supabase/schema.sql` in the SQL Editor (it enables `pg_net` and the delivery trigger).
+2. Supabase > Edge Functions > Deploy a new function > Via Editor. Name it `notify`, paste
+   `index.ts`, deploy, then turn off **Verify JWT** in the function's settings.
+3. Edge Functions > Secrets: add `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `BREVO_API_KEY`,
+   `MAIL_FROM` (a sender verified in Brevo) and `APP_URL`.
+4. Open `https://<project>.supabase.co/functions/v1/notify` in a browser: it reports what is set up.
+
+The public VAPID key also goes in `config.js`. Brevo's free plan sends 300 emails a day;
+`RESEND_API_KEY` works instead if you own a domain verified in Resend.
+
 ## Tests
-Run `npm test` (Node 20+) to check the split and balance maths.
+Run `npm test` (Node 20+) to check the split and balance maths, and
+`EVENLY_TEST=1 deno test -A --node-modules-dir=none tests/notify.deno.test.ts` for the notify function.
 
 ## Files
 | File | What it is |
@@ -100,6 +121,8 @@ Run `npm test` (Node 20+) to check the split and balance maths.
 | `js/state.js` | Data loading and derived balances |
 | `js/money.js` | Split and balance maths (tested in `tests/`) |
 | `js/categories.js`, `js/icons.js` | Categories and icons |
+| `js/push.js`, `js/messages.js` | Phone notifications and their wording |
+| `supabase/functions/notify/` | Sends phone notifications and emails |
 | `vendor/` | QR-code library |
 | `styles.css` | Look and feel (light and dark mode) |
 | `config.js` | Your Supabase URL and key |
