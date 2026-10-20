@@ -767,6 +767,8 @@ end $$;
 create schema if not exists private;
 revoke all on schema private from public, anon, authenticated;
 create table if not exists private.settings (key text primary key, value text not null);
+-- Only the database itself reads this (as its owner); nobody else can, even through the API.
+alter table private.settings enable row level security;
 -- The address of your notify Edge Function. Change the project id if you copy Evenly to another Supabase project.
 insert into private.settings (key, value) values ('notify_url', 'https://kdikawdhbwpqdcialyky.supabase.co/functions/v1/notify')
   on conflict (key) do update set value = excluded.value;
