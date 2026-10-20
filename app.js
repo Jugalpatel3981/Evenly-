@@ -21,7 +21,8 @@ const appUrl = () => location.origin + location.pathname;
 const S = {
   session: null, ready: false, recovery: false,
   groups: {}, members: {}, expenses: {},
-  view: 'home', gid: null, tab: 'activity', authMode: 'signin'
+  view: 'home', gid: null, tab: 'activity', authMode: 'signin',
+  homeTab: (() => { try { return localStorage.getItem('evenly.homeTab') || 'friends'; } catch { return 'friends'; } })()
 };
 
 /* ---------- backend ---------- */
@@ -215,49 +216,73 @@ function renderRecovery(){
     <p class="hint err" id="rHint"></p>
     <button class="btn primary" type="submit" style="justify-content:center">Save password</button></form></div>`;
 }
+const friendOf = gid => membersOf(gid).find(m => m.user_id !== uid()) || null;
+const titleOf = g => g.is_direct ? (friendOf(g.id)?.name || 'Friend') : g.name;
+function balanceCell(g){
+  const me = myId(g.id); if (!me) return '';
+  const b = balances(g.id)[me] || 0;
+  return b > 0 ? `<span class="pos">${g.is_direct ? 'owes you' : 'you get back'}</span><b class="pos">${fmt(b, g.currency)}</b>` :
+         b < 0 ? `<span class="neg">you owe</span><b class="neg">${fmt(b, g.currency)}</b>` : `<b>settled up</b>`;
+}
+function friendStatus(m){
+  if (!m) return '';
+  if (m.user_id) return 'On Evenly';
+  if (m.email) return `Invited · ${m.email}`;
+  return 'Not on Evenly';
+}
 function renderHome(){
-  const gs = groupList();
-  const fab = `<button class="btn primary fab" data-act="new-group">+ New group</button>`;
-  if (!gs.length) {
-    return `<div class="empty">
-      <h1>Hi ${esc(myName())}. Split bills without the awkward maths.</h1>
-      <p>Make a group for a trip, your flat or a dinner. Add friends by email so they can sign in and see it too, or just by name if they don’t need an account.</p>
-      <p>If a friend already added you, their group appears here automatically once you sign in with that email.</p>
-      <button class="btn primary" data-act="new-group">Create your first group</button>
-    </div>`;
-  }
+  const gs = groupList(), friends = gs.filter(g => g.is_direct), groups = gs.filter(g => !g.is_direct);
+  const tab = S.homeTab;
   let owed = 0, owe = 0, cur = null, mixed = false;
-  const rows = gs.map(g => {
-    const exps = expOf(g.id);
-    const spent = exps.filter(e => e.kind !== 'payment').reduce((a, e) => a + Number(e.amount), 0);
-    const me = myId(g.id); let right = '';
-    if (me) {
-      const b = balances(g.id)[me] || 0;
-      if (cur && cur !== g.currency) mixed = true; cur = cur || g.currency;
-      if (b > 0) owed += b; else owe -= b;
-      right = b > 0 ? `<span class="pos">you get back</span><b class="pos">${fmt(b, g.currency)}</b>` :
-              b < 0 ? `<span class="neg">you owe</span><b class="neg">${fmt(b, g.currency)}</b>` : `<b>settled up</b>`;
-    }
-    return `<button class="row" data-act="open-group" data-id="${esc(g.id)}">
-      <span class="av lg" aria-hidden="true">${esc(initials(g.name))}</span>
-      <span class="main"><span class="title" style="display:block">${esc(g.name)}</span>
-      <span class="sub" style="display:block">${membersOf(g.id).length} people · ${fmt(spent, g.currency)} spent</span></span>
-      <span class="amt">${right}</span></button>`;
-  }).join('');
+  gs.forEach(g => {
+    const me = myId(g.id); if (!me) return;
+    const b = balances(g.id)[me] || 0;
+    if (cur && cur !== g.currency) mixed = true; cur = cur || g.currency;
+    if (b > 0) owed += b; else owe -= b;
+  });
   const stats = cur && !mixed ? `<div class="stats">
       <div class="stat"><div class="lbl">You get back</div><div class="val pos">${fmt(owed, cur)}</div></div>
       <div class="stat"><div class="lbl">You owe</div><div class="val neg">${fmt(owe, cur)}</div></div></div>` : '';
-  return `<h1>Your groups</h1>${stats}<div class="list">${rows}</div>${fab}`;
+  const tabs = `<div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="${tab === 'friends'}" data-act="home-tab" data-tab="friends">Friends${friends.length ? ` (${friends.length})` : ''}</button>
+    <button class="tab" role="tab" aria-selected="${tab === 'groups'}" data-act="home-tab" data-tab="groups">Groups${groups.length ? ` (${groups.length})` : ''}</button></div>`;
+  let body;
+  if (tab === 'friends') {
+    body = friends.length ? `<div class="section-h"><h3 style="margin:0">One-to-one with friends</h3><button class="btn sm" data-act="new-friend">+ Add friend</button></div>
+      <div class="list">${friends.map(g => { const f = friendOf(g.id); return `<button class="row" data-act="open-group" data-id="${esc(g.id)}">
+        <span class="av" aria-hidden="true">${esc(initials(f?.name))}</span>
+        <span class="main"><span class="title" style="display:block">${esc(f?.name || 'Friend')}</span><span class="sub" style="display:block">${esc(friendStatus(f))}</span></span>
+        <span class="amt">${balanceCell(g)}</span></button>`; }).join('')}</div>`
+      : `<div class="empty"><h2>Split with one friend</h2>
+        <p>Paid for a friend’s coffee or a cab? Add them here and track it between just the two of you, no group needed. Add their email so they can sign in and see it too.</p>
+        <button class="btn primary" data-act="new-friend">Add a friend</button></div>`;
+  } else {
+    body = groups.length ? `<div class="section-h"><h3 style="margin:0">Trips, flats and shared plans</h3><button class="btn sm" data-act="new-group">+ New group</button></div>
+      <div class="list">${groups.map(g => {
+        const spent = expOf(g.id).filter(e => e.kind !== 'payment').reduce((a, e) => a + Number(e.amount), 0);
+        return `<button class="row" data-act="open-group" data-id="${esc(g.id)}">
+        <span class="av lg" aria-hidden="true">${esc(initials(g.name))}</span>
+        <span class="main"><span class="title" style="display:block">${esc(g.name)}</span>
+        <span class="sub" style="display:block">${membersOf(g.id).length} people · ${fmt(spent, g.currency)} spent</span></span>
+        <span class="amt">${balanceCell(g)}</span></button>`; }).join('')}</div>`
+      : `<div class="empty"><h2>Split with a group</h2>
+        <p>Make a group for a trip, your flat or a dinner. Everyone added by email sees the same expenses and balances.</p>
+        <button class="btn primary" data-act="new-group">Create a group</button></div>`;
+  }
+  const greet = gs.length ? '' : `<p class="muted" style="margin:0">Hi ${esc(myName())}. If a friend already added you, it appears here automatically.</p>`;
+  return `<h1>${gs.length ? 'Your balances' : 'Welcome to Evenly'}</h1>${greet}${stats}${tabs}${body}
+    <button class="btn primary fab" data-act="pick-exp">+ Add expense</button>`;
 }
 function renderGroup(g){
   const exps = expOf(g.id), cur = g.currency, me = myId(g.id), bal = balances(g.id);
   const spent = exps.filter(e => e.kind !== 'payment').reduce((a, e) => a + Number(e.amount), 0);
   const myBal = me ? bal[me] || 0 : 0;
   let html = `<div class="ghead">
-    <div class="crumbs"><button class="btn ghost" data-act="home">‹ All groups</button>
-      <span class="actions"><button class="btn sm" data-act="settle">Settle up</button><button class="btn sm" data-act="edit-group">Edit group</button></span></div>
-    <h1>${esc(g.name)}</h1>
-    <div class="chips">${membersOf(g.id).map(m => `<span class="chip">${esc(m.name)}${m.id === me ? ' (you)' : ''}</span>`).join('')}</div>
+    <div class="crumbs"><button class="btn ghost" data-act="home">‹ ${g.is_direct ? 'All friends' : 'All groups'}</button>
+      <span class="actions"><button class="btn sm" data-act="settle">Settle up</button><button class="btn sm" data-act="${g.is_direct ? 'edit-friend' : 'edit-group'}">${g.is_direct ? 'Edit friend' : 'Edit group'}</button></span></div>
+    <h1>${esc(titleOf(g))}</h1>
+    ${g.is_direct ? `<p class="muted" style="margin:0">${esc(friendStatus(friendOf(g.id)))}</p>`
+      : `<div class="chips">${membersOf(g.id).map(m => `<span class="chip">${esc(m.name)}${m.id === me ? ' (you)' : ''}</span>`).join('')}</div>`}
   </div>
   <div class="stats">
     <div class="stat"><div class="lbl">${myBal > 0 ? 'You get back' : myBal < 0 ? 'You owe' : 'Your balance'}</div>
@@ -354,7 +379,8 @@ const sheet = $('#sheet'), body = $('#sheetBody');
 function openSheet(html){ body.innerHTML = html; if (!sheet.open) sheet.showModal(); const f = body.querySelector('[autofocus]'); if (f) f.focus(); }
 function closeSheet(){ if (sheet.open) sheet.close(); body.innerHTML = ''; }
 sheet.addEventListener('click', e => { if (e.target === sheet) closeSheet(); });
-sheet.addEventListener('close', () => { body.innerHTML = ''; });
+// The close event arrives late: skip the wipe if another sheet has opened since.
+sheet.addEventListener('close', () => { if (!sheet.open) body.innerHTML = ''; });
 body.addEventListener('click', e => { if (e.target.closest('[data-close]')) closeSheet(); });
 function armDelete(btn, fn){
   btn.addEventListener('click', () => {
@@ -444,6 +470,67 @@ function openGroupSheet(gid){
     busy(form, false);
     if (ok) { closeSheet(); toast('Group saved'); }
   });
+}
+
+function openFriendSheet(gid, then){
+  const g = gid ? S.groups[gid] : null, f = g ? friendOf(g.id) : null;
+  const used = !!(g && expOf(g.id).length);
+  openSheet(`<form class="sheet-in" id="fForm" novalidate>${head(g ? 'Edit friend' : 'Add a friend')}
+    <label class="f">Friend’s name<input id="fName" maxlength="40" placeholder="Rahul Mehta" value="${esc(f?.name || '')}" autofocus></label>
+    <label class="f">Their email (optional)<input id="fEmail" type="email" placeholder="rahul@example.com" value="${esc(f?.email || '')}" ${f?.user_id ? 'disabled' : ''}></label>
+    <p class="hint muted" style="font-weight:500">${f?.user_id ? 'They’re on Evenly and already see your shared expenses.' : 'With their email, they can sign in and see everything you share. Without it, you keep track on your own.'}</p>
+    <label class="f">Currency<select id="fCur">${CURRENCIES.map(c => `<option${(g?.currency || 'INR') === c ? ' selected' : ''}>${c}</option>`).join('')}</select></label>
+    <p class="hint err" id="fHint"></p>
+    <div class="actions">${g && g.created_by === uid() ? `<button type="button" class="btn danger" id="fDel">${used ? 'Remove friend and expenses' : 'Remove friend'}</button>` : ''}<span class="sp"></span><button class="btn primary" type="submit">${g ? 'Save' : 'Add friend'}</button></div>
+  </form>`);
+  if (g && $('#fDel')) armDelete($('#fDel'), async () => {
+    if (await run(sb.from('groups').delete().eq('id', g.id), 'Friend removed')) { closeSheet(); S.view = 'home'; render(); }
+  });
+  $('#fForm').addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const name = $('#fName').value.trim(), email = $('#fEmail').value.trim().toLowerCase(), cur = $('#fCur').value, hint = $('#fHint');
+    if (!name) { hint.textContent = 'Enter your friend’s name.'; return; }
+    if (email && !validEmail(email)) { hint.textContent = 'That email doesn’t look right.'; return; }
+    if (email && email === (S.session.user.email || '').toLowerCase()) { hint.textContent = 'That’s your own email. Enter your friend’s.'; return; }
+    busy(ev.target, true);
+    if (!g) {
+      const id = await run(sb.rpc('add_friend', {p_my_name: myName(), p_name: name, p_email: email || null, p_currency: cur}));
+      busy(ev.target, false);
+      if (!id) return;
+      closeSheet(); await loadAll();
+      if (then) then(id); else { S.view = 'group'; S.gid = id; S.tab = 'activity'; render(); }
+      toast(`${name} added`);
+      return;
+    }
+    let ok = true;
+    const patch = {name}; if (!f.user_id) patch.email = email || null;
+    if (name !== f.name || (!f.user_id && (email || null) !== (f.email || null)))
+      ok = !!(await run(sb.from('group_members').update(patch).eq('id', f.id))) && ok;
+    if (cur !== g.currency) ok = !!(await run(sb.from('groups').update({currency: cur}).eq('id', g.id))) && ok;
+    busy(ev.target, false);
+    if (ok) { closeSheet(); toast('Saved'); }
+  });
+}
+
+// Home "Add expense": choose who it's with first.
+function openPickSheet(){
+  const gs = groupList(), friends = gs.filter(g => g.is_direct), groups = gs.filter(g => !g.is_direct);
+  const row = g => `<button class="row" type="button" data-pick="${esc(g.id)}">
+    <span class="${g.is_direct ? 'av' : 'av lg'}" aria-hidden="true">${esc(initials(titleOf(g)))}</span>
+    <span class="main"><span class="title" style="display:block">${esc(titleOf(g))}</span>
+    <span class="sub" style="display:block">${g.is_direct ? 'Friend' : `Group · ${membersOf(g.id).length} people`}</span></span></button>`;
+  openSheet(`<div class="sheet-in">${head('Add an expense with…')}
+    <div class="list"><button class="row" type="button" data-pick="new-friend"><span class="av" aria-hidden="true">+</span><span class="main"><span class="title" style="display:block">A new friend</span><span class="sub" style="display:block">Just the two of you</span></span></button>
+    <button class="row" type="button" data-pick="new-group"><span class="av lg" aria-hidden="true">+</span><span class="main"><span class="title" style="display:block">A new group</span><span class="sub" style="display:block">Trip, flat, dinner</span></span></button></div>
+    ${friends.length ? `<h3 style="margin:4px 0 -6px">Friends</h3><div class="list">${friends.map(row).join('')}</div>` : ''}
+    ${groups.length ? `<h3 style="margin:4px 0 -6px">Groups</h3><div class="list">${groups.map(row).join('')}</div>` : ''}
+  </div>`);
+  body.querySelectorAll('[data-pick]').forEach(b => b.addEventListener('click', () => {
+    const v = b.dataset.pick;
+    if (v === 'new-friend') openFriendSheet(null, id => openExpenseSheet(id, null));
+    else if (v === 'new-group') openGroupSheet(null);
+    else openExpenseSheet(v, null);
+  }));
 }
 
 function openExpenseSheet(gid, eid){
@@ -562,7 +649,7 @@ function openSettleSheet(gid, pre = {}){
 
 function copySummary(g){
   const tx = simplify(balances(g.id));
-  const text = `${g.name}: who owes whom\n` + (tx.length ? tx.map(t => `• ${nameOf(g.id, t.from)} pays ${nameOf(g.id, t.to)} ${fmt(t.amount, g.currency)}`).join('\n') : 'Everyone is settled up.')
+  const text = `${g.is_direct ? `You and ${titleOf(g)}` : g.name}: who owes whom\n` + (tx.length ? tx.map(t => `• ${nameOf(g.id, t.from)} pays ${nameOf(g.id, t.to)} ${fmt(t.amount, g.currency)}`).join('\n') : 'Everyone is settled up.')
     + `\n\nSee the details: ${appUrl()}`;
   const fallback = () => {
     openSheet(`<div class="sheet-in">${head('Copy this summary')}<textarea class="copybox" id="cBox" readonly>${esc(text)}</textarea></div>`);
@@ -612,11 +699,15 @@ $('#app').addEventListener('click', ev => {
   const el = ev.target.closest('[data-act]'); if (!el) return;
   const a = el.dataset.act, g = S.groups[S.gid];
   if (a === 'open-group') { S.view = 'group'; S.gid = el.dataset.id; S.tab = 'activity'; render(); window.scrollTo(0, 0); }
-  else if (a === 'home') { S.view = 'home'; S.gid = null; render(); window.scrollTo(0, 0); }
+  else if (a === 'home') { if (g) S.homeTab = g.is_direct ? 'friends' : 'groups'; S.view = 'home'; S.gid = null; render(); window.scrollTo(0, 0); }
   else if (a === 'tab') { S.tab = el.dataset.tab; render(); }
   else if (a === 'signout') sb.auth.signOut();
   else if (a === 'new-group') openGroupSheet(null);
   else if (a === 'edit-group') openGroupSheet(S.gid);
+  else if (a === 'home-tab') { S.homeTab = el.dataset.tab; try { localStorage.setItem('evenly.homeTab', S.homeTab); } catch {} render(); }
+  else if (a === 'new-friend') openFriendSheet(null);
+  else if (a === 'edit-friend') openFriendSheet(S.gid);
+  else if (a === 'pick-exp') openPickSheet();
   else if (a === 'add-exp') openExpenseSheet(S.gid, null);
   else if (a === 'edit-exp') openExpenseSheet(S.gid, el.dataset.id);
   else if (a === 'edit-pay') openSettleSheet(S.gid, {id: el.dataset.id});
