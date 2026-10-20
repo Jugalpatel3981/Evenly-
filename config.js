@@ -1,6 +1,6 @@
-// Fill these in from Supabase > Project Settings > API (or the "Connect" button).
-// The anon/publishable key is meant to be public: row level security in schema.sql protects the data.
+// Supabase project for Evenly (Project Settings > API).
+// The anon key is meant to be public: row level security in supabase/schema.sql protects the data.
 window.EVENLY_CONFIG = {
-  SUPABASE_URL: 'https://YOUR-PROJECT-ID.supabase.co',
-  SUPABASE_ANON_KEY: 'YOUR-ANON-KEY'
+  SUPABASE_URL: 'https://kdikawdhbwpqdcialyky.supabase.co',
+  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtkaWthd2RoYndwcWRjaWFseWt5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0NTA0ODQsImV4cCI6MjEwODAyNjQ4NH0.KPl7Mb1xxgAyeIyKdE5eWgWHl5WqjqCBrQgyapFkRTs'
 };
