@@ -23,7 +23,7 @@ export { ls };
 
 export const S = {
   session: null, ready: false, recovery: false,
-  groups: {}, members: {}, expenses: {}, profiles: {}, activity: [],
+  groups: {}, members: {}, expenses: {}, profiles: {}, activity: [], notifications: [],
   view: 'home', gid: null, fkey: null, tab: 'expenses', authMode: 'signin',
   homeTab: ls.get('evenly.homeTab', 'friends'),
   pendingInvite: ls.get('evenly.invite', null),
@@ -36,6 +36,7 @@ export const emit = () => listener();
 export const uid = () => S.session?.user?.id;
 export const myProfile = () => S.profiles[uid()] || null;
 export const myName = () => myProfile()?.name || S.session?.user?.user_metadata?.name || (S.session?.user?.email || '').split('@')[0] || 'Me';
+export const unreadCount = () => S.notifications.filter(n => !n.read_at).length;
 export const defaultCurrency = () => myProfile()?.default_currency || 'INR';
 
 /* ---------- loading ---------- */
@@ -49,9 +50,11 @@ async function fetchAll(table){
   }
 }
 export async function loadAll(){
-  const [g, m, e, p, a] = await Promise.all([
-    fetchAll('groups'), fetchAll('group_members'), fetchAll('expenses'), fetchAll('profiles'),
-    sb.from('activity').select('*').order('created_at', {ascending: false}).limit(300).then(r => { if (r.error) throw r.error; return r.data; }),
+  const recent = (table, n) => sb.from(table).select('*').order('created_at', {ascending: false}).limit(n).then(r => { if (r.error) throw r.error; return r.data; });
+  const [g, m, e, p, a, nt] = await Promise.all([
+    fetchAll('groups'), fetchAll('group_members'), fetchAll('expenses'), fetchAll('profiles'), recent('activity', 300),
+    // Older databases (before phase 3) have no notifications table yet.
+    recent('notifications', 100).catch(() => []),
   ]);
   S.groups = Object.fromEntries(g.map(r => [r.id, r]));
   S.members = {};
@@ -59,6 +62,7 @@ export async function loadAll(){
   S.expenses = Object.fromEntries(e.map(r => [r.id, r]));
   S.profiles = Object.fromEntries(p.map(r => [r.id, r]));
   S.activity = a;
+  S.notifications = nt;
   S.ready = true;
   emit();
 }
