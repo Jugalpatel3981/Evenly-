@@ -289,18 +289,33 @@ export async function expenseWithFriend(key){
 }
 
 /* ---------- expense details: shares, notes, comments, history ---------- */
-function changes(a){
-  const o = a.data?.old || {}, n = a.data?.new || {};
-  const out = [];
-  if (o.description !== n.description) out.push(`description to “${esc(n.description)}”`);
-  if (Number(o.amount) !== Number(n.amount) || o.currency !== n.currency) out.push(`amount from ${fmt(Number(o.amount), o.currency || 'INR')} to ${fmt(Number(n.amount), n.currency || 'INR')}`);
-  if (o.date !== n.date) out.push(`date to ${esc(niceDate(n.date))}`);
-  if (o.category !== n.category) out.push(`category to ${esc(catOf(n.category).label)}`);
-  if (JSON.stringify(o.split) !== JSON.stringify(n.split)) out.push('the split');
-  if (o.paid_by !== n.paid_by || JSON.stringify(o.payers) !== JSON.stringify(n.payers)) out.push('who paid');
-  if (o.notes !== n.notes) out.push('the notes');
+// What changed in an edit, in plain words: "the amount from ₹900.00 to ₹1,200.00", "Bina’s share from …".
+function changes(a, gid){
+  const o = a.data?.old || {}, n = a.data?.new || {}, out = [];
+  const oc = o.currency || S.groups[gid]?.currency || 'INR', nc = n.currency || S.groups[gid]?.currency || 'INR';
+  const name = id => { const x = nameOf(gid, id); return x === 'You' ? 'your' : `${x}’s`; };
+  const payer = e => { const p = payersOf(e), ks = Object.keys(p); return ks.length > 1 ? `${ks.length} people` : nameOf(gid, ks[0]); };
+  if (o.description !== n.description) out.push(`the description from “${esc(o.description)}” to “${esc(n.description)}”`);
+  if (Number(o.amount) !== Number(n.amount) || oc !== nc) out.push(`the amount from ${fmt(Number(o.amount), oc)} to ${fmt(Number(n.amount), nc)}`);
+  if (o.date !== n.date) out.push(`the date from ${esc(niceDate(o.date))} to ${esc(niceDate(n.date))}`);
+  if (o.category !== n.category) out.push(`the category to ${esc(catOf(n.category).label)}`);
+  if (o.paid_by !== n.paid_by || JSON.stringify(o.payers) !== JSON.stringify(n.payers)) out.push(`who paid from ${esc(payer(o))} to ${esc(payer(n))}`);
+  if (JSON.stringify(o.split) !== JSON.stringify(n.split) && Number(o.amount) === Number(n.amount)) {
+    const ids = [...new Set([...Object.keys(o.split || {}), ...Object.keys(n.split || {})])]
+      .filter(id => Number(o.split?.[id] || 0) !== Number(n.split?.[id] || 0));
+    ids.slice(0, 3).forEach(id => out.push(`${esc(name(id))} share from ${fmt(Number(o.split?.[id] || 0), nc)} to ${fmt(Number(n.split?.[id] || 0), nc)}`));
+    if (ids.length > 3) out.push(`${ids.length - 3} more shares`);
+  } else if (JSON.stringify(o.split) !== JSON.stringify(n.split)) {
+    // An equal split just follows a new amount: only mention it if who's in it changed.
+    const sameEqual = o.split_mode === 'equal' && n.split_mode === 'equal'
+      && JSON.stringify(Object.keys(o.split || {}).sort()) === JSON.stringify(Object.keys(n.split || {}).sort());
+    if (!sameEqual) out.push('the split');
+  }
+  if ((o.notes || '') !== (n.notes || '')) out.push(n.notes ? 'the notes' : 'removed the notes');
+  if ((o.receipt_path || null) !== (n.receipt_path || null)) out.push(n.receipt_path ? 'the receipt photo' : 'removed the receipt photo');
   if (o.repeat !== n.repeat) out.push(n.repeat === 'never' ? 'it to stop repeating' : `it to repeat ${n.repeat}`);
-  return out.length ? out.join(', ') : 'details';
+  if (!out.length) return 'this expense';
+  return out.length === 1 ? out[0] : `${out.slice(0, -1).join(', ')} and ${out[out.length - 1]}`;
 }
 function whoDid(gid, actor){
   if (actor === uid()) return 'You';
@@ -338,33 +353,34 @@ export async function openExpenseDetail(eid){
     ${e.notes ? `<div class="notes">${esc(e.notes)}</div>` : ''}
     ${isPay ? '' : categoryChart(g, e, cur)}
     <h3 class="sec-h">${icon('message-square', 14)} Comments</h3>
-    <div class="list" id="cList"><div class="row static muted">Loading…</div></div>
-    <form id="cForm" class="inline-form"><label class="f" style="flex:1"><span class="sr">Add a comment</span><input id="cBody" maxlength="1000" placeholder="Add a comment"></label><button class="btn" type="submit">${icon('send', 15)}<span class="sr">Post</span></button></form>
-    <h3 class="sec-h">${icon('history', 14)} History</h3>
-    <div class="list" id="hList"><div class="row static muted">Loading…</div></div>
+    <div class="thread" id="cList"><div class="muted small">Loading…</div></div>
+    <form id="cForm" class="inline-form comment-box"><label class="f" style="flex:1"><span class="sr">Add a comment</span><input id="cBody" maxlength="1000" placeholder="Add a comment"></label><button class="btn primary" type="submit">${icon('send', 15)}<span class="sr">Post</span></button></form>
   </div>`, {full: true});
   $('#dEdit').addEventListener('click', () => isPay ? openSettleSheet(g.id, {id: e.id}) : openExpenseSheet(g.id, e.id));
   armDelete($('#dDel'), async () => { if (await run(sb.from('expenses').delete().eq('id', e.id), 'Deleted. You can restore it from Activity.')) closeSheet(); }, 'Tap again');
+  // Comments and every change to the expense, in one thread, oldest first.
   const loadComments = async () => {
-    const {data, error} = await sb.from('comments').select('*').eq('expense_id', e.id).order('created_at');
+    const [c, h] = await Promise.all([
+      sb.from('comments').select('*').eq('expense_id', e.id).order('created_at'),
+      sb.from('activity').select('*').eq('expense_id', e.id).order('created_at'),
+    ]);
     const list = $('#cList'); if (!list) return;
-    if (error) { list.innerHTML = `<div class="row static muted">${esc(friendly(error))}</div>`; return; }
-    list.innerHTML = data.length ? data.map(c => `<div class="row static comment">${avatar(c.user_id === uid() ? myName() : whoDid(g.id, c.user_id), S.profiles[c.user_id]?.avatar_url)}
-      <span class="main"><span class="sub"><b>${esc(whoDid(g.id, c.user_id))}</b> · ${esc(ago(c.created_at))}</span><span class="wrap-text">${esc(c.body)}</span></span>
-      ${c.user_id === uid() ? `<button class="btn ghost icon-btn" data-delc="${esc(c.id)}" aria-label="Delete comment">${icon('x', 16)}</button>` : ''}</div>`).join('')
-      : `<div class="row static muted">No comments yet.</div>`;
-  };
-  const loadHistory = async () => {
-    const {data, error} = await sb.from('activity').select('*').eq('expense_id', e.id).order('created_at', {ascending: false});
-    const list = $('#hList'); if (!list) return;
-    if (error) { list.innerHTML = `<div class="row static muted">${esc(friendly(error))}</div>`; return; }
-    const rows = data.filter(a => a.kind !== 'comment').map(a => {
-      const who = esc(whoDid(g.id, a.actor));
-      const text = a.kind === 'expense_added' ? `${who} added this` : a.kind === 'expense_recurring' ? 'Added by a repeating expense'
-        : a.kind === 'expense_restored' ? `${who} restored this` : a.kind === 'expense_updated' ? `${who} changed ${changes(a)}` : `${who} deleted this`;
-      return `<div class="row static"><span class="main"><span class="wrap-text">${text}</span><span class="sub">${esc(ago(a.created_at))}</span></span></div>`;
-    });
-    list.innerHTML = rows.join('') || `<div class="row static muted">No changes recorded yet.</div>`;
+    if (c.error || h.error) { list.innerHTML = `<div class="muted small">${esc(friendly(c.error || h.error))}</div>`; return; }
+    const items = [
+      ...c.data.map(x => ({at: x.created_at, html: `<div class="msg${x.user_id === uid() ? ' mine' : ''}">${avatar(x.user_id === uid() ? myName() : whoDid(g.id, x.user_id), S.profiles[x.user_id]?.avatar_url, 'av sm')}
+        <div class="bubble"><div class="sub"><b>${esc(whoDid(g.id, x.user_id))}</b> · ${esc(ago(x.created_at))}</div><div class="wrap-text">${esc(x.body)}</div></div>
+        ${x.user_id === uid() ? `<button class="btn ghost icon-btn" data-delc="${esc(x.id)}" aria-label="Delete comment">${icon('x', 15)}</button>` : ''}</div>`})),
+      ...h.data.filter(a => a.kind !== 'comment').map(a => {
+        const who = `<b>${esc(whoDid(g.id, a.actor))}</b>`;
+        const text = a.kind === 'expense_added' ? `${who} added this ${isPay ? 'payment' : 'expense'}`
+          : a.kind === 'expense_recurring' ? 'Added automatically by a repeating expense'
+          : a.kind === 'expense_restored' ? `${who} restored this expense`
+          : a.kind === 'expense_updated' ? `${who} changed ${changes(a, g.id)}`
+          : `${who} deleted this expense`;
+        return {at: a.created_at, html: `<div class="sysmsg">${icon(a.kind === 'expense_updated' ? 'pencil' : a.kind === 'expense_restored' ? 'rotate-ccw' : 'receipt', 13)}<span class="wrap-text">${text} <span class="muted">· ${esc(ago(a.created_at))}</span></span></div>`};
+      }),
+    ].sort((x, y) => String(x.at).localeCompare(String(y.at)));
+    list.innerHTML = items.map(i => i.html).join('') || `<div class="muted small">No comments yet.</div>`;
   };
   b.querySelector('#cList').addEventListener('click', async ev => {
     const x = ev.target.closest('[data-delc]'); if (!x) return;
@@ -378,7 +394,7 @@ export async function openExpenseDetail(eid){
     busy(ev.target, false);
     if (ok) { $('#cBody').value = ''; loadComments(); }
   });
-  loadComments(); loadHistory();
+  loadComments();
   if (e.receipt_path) sb.storage.from('receipts').createSignedUrl(e.receipt_path, 3600).then(({data, error}) => {
     const a = $('#dReceipt'); if (!a) return;
     if (error) { a.title = 'Couldn’t load the receipt.'; return; }
