@@ -1,4 +1,4 @@
--- Kitty: database schema for Supabase.
+-- Evenly: database schema for Supabase.
 -- Paste this whole file into Supabase > SQL Editor > New query, then click Run.
 -- Safe to re-run: it drops and recreates the functions and policies.
 
