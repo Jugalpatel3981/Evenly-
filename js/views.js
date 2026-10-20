@@ -1,11 +1,12 @@
 // Screens. Each returns HTML for #app; clicks are handled in main.js through data-act attributes.
-import { S, uid, myName, myProfile, groupList, membersOf, expOf, nameOf, myId, friendOf, titleOf,
+import { S, uid, myName, myProfile, unreadCount, member, groupList, membersOf, expOf, nameOf, myId, friendOf, titleOf,
          personName, avatarUrl, groupBalances, myBalance, friendsIndex } from './state.js';
 import { esc, fmt, fmtMulti, ago } from './util.js';
 import { simplify, pairwise, payersOf, curOf } from './money.js';
 import { catOf, CATEGORY_GROUPS, typeOf } from './categories.js';
 import { icon } from './icons.js';
 import { avatar, catIcon, payIcon, balanceLines, currencyOptions } from './ui.js';
+import { noteText, noteIcon } from './messages.js';
 
 const brand = `<div class="brand"><span class="mark" aria-hidden="true">E</span>Evenly</div>`;
 
@@ -44,7 +45,10 @@ export function renderRecovery(){
 
 function topBar(){
   const p = myProfile();
-  return `<header class="top">${brand}<button class="me-btn" data-act="settings" aria-label="Account settings">${avatar(myName(), p?.avatar_url)}<span class="me-name">${esc(myName())}</span></button></header>`;
+  const n = unreadCount();
+  return `<header class="top">${brand}<span class="top-actions">
+    <button class="btn ghost icon-btn bell" data-act="notifications" aria-label="Notifications${n ? `, ${n} unread` : ''}">${icon('bell', 22)}${n ? `<span class="dot-count">${n > 99 ? '99+' : n}</span>` : ''}</button>
+    <button class="me-btn" data-act="settings" aria-label="Account settings">${avatar(myName(), p?.avatar_url)}<span class="me-name">${esc(myName())}</span></button></span></header>`;
 }
 
 export function renderApp(){
@@ -59,6 +63,7 @@ export function renderApp(){
   const body = S.view === 'group' ? renderGroup(S.groups[S.gid])
              : S.view === 'friend' ? renderFriendOnly(friendsIndex().get(S.fkey))
              : S.view === 'settings' ? renderSettings()
+             : S.view === 'notifications' ? renderNotifications()
              : renderHome();
   return topBar() + body;
 }
@@ -111,7 +116,7 @@ function renderHome(){
     body = renderActivityFeed(S.activity);
   }
   const greet = gs.length ? '' : `<p class="muted" style="margin:0">Hi ${esc(myName())}. If a friend already added you, it appears here automatically.</p>`;
-  return `<h1>${gs.length ? 'Your balances' : 'Welcome to Evenly'}</h1>${greet}${stats}${tabs}${body}
+  return `<h1>${gs.length ? 'Your balances' : 'Welcome to Evenly'}</h1>${greet}${pushBanner()}${stats}${tabs}${body}
     <button class="btn primary fab" data-act="pick-exp">${icon('plus', 20)} Add expense</button>`;
 }
 function friendSub(f){
@@ -198,7 +203,11 @@ function renderGroup(g){
     <div class="stat"><div class="lbl">${g.is_direct ? 'Between you two' : 'Your balance'}</div><div class="val stack">${balanceLines(mine, {they: g.is_direct ? `${esc(titleOf(g))} owes you` : 'you get back'})}</div></div>
     <div class="stat"><div class="lbl">${g.is_direct ? 'Spent together' : 'Group spending'}</div><div class="val">${fmtMulti(spent) || fmt(0, g.currency)}</div></div>
   </div>`;
-  if (g.is_direct) html += acrossGroups(friendsIndex().get(friendKeyOf(g)));
+  if (g.is_direct) {
+    const owed = Object.entries(mine).filter(([, v]) => v > 0);
+    if (owed.length && f && canRemind(g.id, f.id)) html += `<div class="actions">${owed.map(([c, v]) => `<button class="btn sm" data-act="remind" data-gid="${esc(g.id)}" data-member="${esc(f.id)}" data-amt="${v}" data-cur="${c}">${icon('bell', 14)} Remind ${esc(titleOf(g))} about ${fmt(v, c)}</button>`).join('')}</div>`;
+    html += acrossGroups(friendsIndex().get(friendKeyOf(g)));
+  }
   html += `<div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button class="tab" role="tab" aria-selected="${S.tab === k}" data-act="tab" data-tab="${k}">${l}</button>`).join('')}</div>`;
   if (S.tab === 'expenses') html += renderExpenses(g, me);
   else if (S.tab === 'balances') html += renderBalances(g);
@@ -292,7 +301,8 @@ function renderBalances(g){
     const txRows = tx.map(t => `<div class="row static">
         <span class="main"><span class="title">${esc(nameOf(g.id, t.from))} ${t.from === me ? 'pay' : 'pays'} ${esc(nameOf(g.id, t.to))}</span>
         <span class="sub num">${fmt(t.amount, cur)}</span></span>
-        <button class="btn sm" data-act="record" data-from="${esc(t.from)}" data-to="${esc(t.to)}" data-amt="${t.amount}" data-cur="${cur}">Record</button></div>`).join('');
+        <span class="actions nowrap">${t.to === me && canRemind(g.id, t.from) ? `<button class="btn sm ghost" data-act="remind" data-gid="${esc(g.id)}" data-member="${esc(t.from)}" data-amt="${t.amount}" data-cur="${cur}">${icon('bell', 14)} Remind</button>` : ''}
+        <button class="btn sm" data-act="record" data-from="${esc(t.from)}" data-to="${esc(t.to)}" data-amt="${t.amount}" data-cur="${cur}">Record</button></span></div>`).join('');
     html += `<div class="section"><h3>${curs.length > 1 ? `${cur} · ` : ''}Who’s up and who’s down</h3><div class="list">${rows}</div></div>
       <div class="section"><h3>${g.simplify ? 'Fewest payments to settle' : 'Who owes whom'}</h3><div class="list">${txRows}</div></div>`;
   }
@@ -350,6 +360,19 @@ function renderSettings(){
   <section class="card-sec"><h3>${icon('key-round', 15)} Password</h3>
     <form id="passForm" class="inline-form"><label class="f">New password<input id="sPass" type="password" autocomplete="new-password" placeholder="At least 6 characters"></label><button class="btn" type="submit">Change</button></form>
   </section>
+  <section class="card-sec"><h3>${icon('bell', 15)} Notifications</h3>
+    <div class="spread wrapflex"><span><b>Phone notifications</b><br><span class="muted small">${pushHelp()}</span></span>${pushButton()}</div>
+    <label class="switch"><input type="checkbox" id="sEmailNotes" ${p.notify_email === false ? '' : 'checked'}><span><b>Email notifications</b><br><span class="muted small">An email when someone adds, changes or deletes an expense you’re in, comments, or reminds you.</span></span></label>
+  </section>
+  <section class="card-sec"><h3>${icon('wallet', 15)} How friends can pay you</h3>
+    <p class="muted small" style="margin:0">Friends who owe you see a pay button when they settle up. Leave blank anything you don’t use.</p>
+    <form id="payForm" class="sheet-in" style="padding:0">
+      <label class="f">UPI ID<input id="sUpi" placeholder="yourname@okaxis" value="${esc(p.upi_id || '')}" autocomplete="off"></label>
+      <div class="grid2"><label class="f">PayPal.me username<input id="sPaypal" placeholder="jugalpatel" value="${esc(p.paypal_me || '')}" autocomplete="off"></label>
+      <label class="f">Venmo username<input id="sVenmo" placeholder="jugal-patel" value="${esc(p.venmo || '')}" autocomplete="off"></label></div>
+      <div class="actions"><span class="sp"></span><button class="btn" type="submit">Save</button></div>
+    </form>
+  </section>
   <section class="card-sec"><h3>${icon('share-2', 15)} Invite friends to Evenly</h3>
     <div class="actions"><code class="grow">${esc(location.origin)}</code><button class="btn sm" data-act="copy-app">${icon('copy', 15)} Copy link</button></div>
   </section>
@@ -360,4 +383,45 @@ function renderSettings(){
     <p class="muted small" style="margin:0">Your login is deleted. Groups and expenses stay for your friends, under your name. This can’t be undone.</p>
     <form id="deleteForm" class="inline-form"><label class="f">Type DELETE to confirm<input id="sDel" autocomplete="off"></label><button class="btn danger" type="submit">Delete my account</button></form>
   </section>`;
+}
+
+/* ---------- notifications ---------- */
+// Can Evenly reach this member? Only people with an account or an email address.
+function canRemind(gid, mid){ const m = member(gid, mid); return !!(m && (m.user_id || m.email)); }
+
+function pushHelp(){
+  const st = S.pushStatus;
+  return st === 'on' ? 'On for this device.' : st === 'blocked' ? 'Blocked in your browser settings. Allow notifications for this site, then come back.'
+    : st === 'install' ? 'On iPhone: tap Share, then Add to Home Screen, and open Evenly from there to turn these on.'
+    : st === 'unsupported' ? 'This browser can’t show notifications.' : 'Get an alert on this device when friends add expenses with you.';
+}
+function pushButton(){
+  if (S.pushStatus === 'on') return `<button class="btn sm" data-act="push-off">Turn off</button>`;
+  if (S.pushStatus === 'off') return `<button class="btn sm primary" data-act="push-on">Turn on</button>`;
+  return '';
+}
+function pushBanner(){
+  let dismissed = false; try { dismissed = !!localStorage.getItem('evenly.pushAsked'); } catch {}
+  if (dismissed) return '';
+  if (S.pushStatus === 'off' && 'Notification' in window && Notification.permission === 'default')
+    return `<div class="banner ok push-banner">${icon('bell', 18)}<span>Get a notification when friends add an expense with you.</span>
+      <span class="actions nowrap"><button class="btn sm primary" data-act="push-on">Turn on</button><button class="btn sm ghost" data-act="push-later">Not now</button></span></div>`;
+  if (S.pushStatus === 'install')
+    return `<div class="banner ok push-banner">${icon('smartphone', 18)}<span>To get notifications on iPhone, tap <b>Share</b> then <b>Add to Home Screen</b>, and open Evenly from your Home Screen.</span>
+      <span class="actions nowrap"><button class="btn sm ghost" data-act="push-later">OK</button></span></div>`;
+  return '';
+}
+function renderNotifications(){
+  const list = S.notifications;
+  const rows = list.map(n => {
+    const t = noteText(n);
+    const target = n.expense_id && S.expenses[n.expense_id] ? `data-act="open-exp" data-id="${esc(n.expense_id)}"` : n.group_id && S.groups[n.group_id] ? `data-act="open-group" data-id="${esc(n.group_id)}"` : '';
+    const [open, close] = target ? [`<button class="row${n.read_at ? '' : ' unread'}" ${target}>`, '</button>'] : [`<div class="row static${n.read_at ? '' : ' unread'}">`, '</div>'];
+    return `${open}<span class="ico" style="--c:var(--accent)">${icon(noteIcon(n))}</span>
+      <span class="main"><span class="wrap-text"><b>${esc(t.title)}</b></span>${t.body ? `<span class="wrap-text muted small">${esc(t.body)}</span>` : ''}<span class="sub">${esc(ago(n.created_at))}</span></span>${close}`;
+  }).join('');
+  return `<div class="ghead"><div class="crumbs"><button class="btn ghost" data-act="home">${icon('chevron-left')} Back</button>
+      <button class="btn sm ghost" data-act="settings">${icon('settings', 15)} Settings</button></div><h1>Notifications</h1></div>
+    ${pushBanner()}
+    ${rows ? `<div class="list">${rows}</div>` : `<div class="empty"><h2>You’re all caught up</h2><p>When friends add expenses with you, comment, pay you or send a reminder, it shows up here.</p></div>`}`;
 }

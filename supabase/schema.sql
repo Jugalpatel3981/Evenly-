@@ -414,9 +414,11 @@ begin
   if tg_op = 'INSERT' then
     if new.user_id is not null and new.user_id = (select created_by from public.groups where id = new.group_id) then return new; end if;
     insert into public.activity (group_id, kind, data)
-      values (new.group_id, case when new.user_id is null then 'member_added' else 'member_joined' end, jsonb_build_object('name', new.name, 'member', new.id));
+      values (new.group_id, case when new.user_id is null then 'member_added' else 'member_joined' end,
+              jsonb_build_object('name', new.name, 'member', new.id, 'user', new.user_id, 'email', new.email));
   elsif old.user_id is null and new.user_id is not null then
-    insert into public.activity (group_id, actor, kind, data) values (new.group_id, new.user_id, 'member_joined', jsonb_build_object('name', new.name, 'member', new.id));
+    insert into public.activity (group_id, actor, kind, data)
+      values (new.group_id, coalesce(auth.uid(), new.user_id), 'member_joined', jsonb_build_object('name', new.name, 'member', new.id, 'user', new.user_id));
   elsif old.user_id is not null and new.user_id is null then
     insert into public.activity (group_id, actor, kind, data) values (new.group_id, old.user_id, 'member_left', jsonb_build_object('name', new.name, 'member', new.id));
   end if;
@@ -602,11 +604,207 @@ begin
     with check (bucket_id = 'covers' and public.is_member_text((storage.foldername(name))[1]))$p$;
 end $$;
 
+-- =====================================================================
+-- Phase 3: notifications, reminders, receipts and payment details.
+-- =====================================================================
+
+-- ---------- profile: notification choices and how friends can pay you ----------
+alter table public.profiles add column if not exists notify_push boolean not null default true;
+alter table public.profiles add column if not exists notify_email boolean not null default true;
+alter table public.profiles add column if not exists upi_id text;
+alter table public.profiles add column if not exists paypal_me text;
+alter table public.profiles add column if not exists venmo text;
+alter table public.profiles drop constraint if exists profiles_upi_check;
+alter table public.profiles add constraint profiles_upi_check check (upi_id is null or upi_id ~ '^[A-Za-z0-9._-]{2,64}@[A-Za-z0-9.-]{2,64}$');
+alter table public.profiles drop constraint if exists profiles_paypal_check;
+alter table public.profiles add constraint profiles_paypal_check check (paypal_me is null or paypal_me ~ '^[A-Za-z0-9]{1,40}$');
+alter table public.profiles drop constraint if exists profiles_venmo_check;
+alter table public.profiles add constraint profiles_venmo_check check (venmo is null or venmo ~ '^[A-Za-z0-9_-]{1,40}$');
+
+-- ---------- receipts: a private photo per expense ----------
+alter table public.expenses add column if not exists receipt_path text;
+
+-- ---------- phone notification subscriptions, one per device ----------
+create table if not exists public.push_subscriptions (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  endpoint    text not null unique,
+  p256dh      text not null,
+  auth        text not null,
+  created_at  timestamptz not null default now()
+);
+alter table public.push_subscriptions enable row level security;
+drop policy if exists "own push subscriptions" on public.push_subscriptions;
+create policy "own push subscriptions" on public.push_subscriptions for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- ---------- notifications: one row per person to tell ----------
+-- user_id for people with accounts; email (and no user_id) for invited people who haven't signed up.
+create table if not exists public.notifications (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid references auth.users(id) on delete cascade,
+  email         text,
+  kind          text not null,
+  group_id      uuid,
+  expense_id    uuid,
+  actor         uuid,
+  data          jsonb not null default '{}'::jsonb,
+  created_at    timestamptz not null default now(),
+  read_at       timestamptz,
+  delivered_at  timestamptz,
+  constraint notifications_recipient_check check (user_id is not null or email is not null)
+);
+create index if not exists notifications_user_idx on public.notifications (user_id, created_at desc);
+alter table public.notifications enable row level security;
+drop policy if exists "read own notifications" on public.notifications;
+drop policy if exists "mark own notifications read" on public.notifications;
+create policy "read own notifications" on public.notifications for select using (user_id = auth.uid());
+create policy "mark own notifications read" on public.notifications for update using (user_id = auth.uid()) with check (user_id = auth.uid());
+revoke insert, delete, update on public.notifications from anon, authenticated;
+grant update (read_at) on public.notifications to authenticated;
+
+create or replace function public.display_name(p_group uuid, p_user uuid)
+returns text language sql stable security definer set search_path = public as $$
+  select coalesce(nullif((select name from public.profiles where id = p_user), ''),
+                  (select name from public.group_members where group_id = p_group and user_id = p_user limit 1),
+                  'Someone');
+$$;
+
+-- Turns each activity entry into notifications for the people it involves, never the person who did it.
+create or replace function public.queue_notifications()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  g public.groups;
+  e jsonb;
+  ex jsonb;
+  pay jsonb;
+  spl jsonb;
+  old_ids jsonb := '{}'::jsonb;
+  who text;
+  m record;
+begin
+  select * into g from public.groups where id = new.group_id;
+  if not found then return new; end if;
+  who := public.display_name(new.group_id, new.actor);
+
+  if new.kind in ('expense_added', 'expense_updated', 'expense_deleted', 'expense_restored', 'comment') then
+    e := coalesce(new.data->'new', new.data->'old');
+    if new.kind = 'comment' then select to_jsonb(x) into e from public.expenses x where x.id = new.expense_id; end if;
+    if e is null then return new; end if;
+    pay := case when jsonb_typeof(e->'payers') = 'object' then e->'payers' else jsonb_build_object(e->>'paid_by', (e->>'amount')::bigint) end;
+    spl := coalesce(e->'split', '{}'::jsonb);
+    -- People taken off an edited expense hear about it too.
+    if new.kind = 'expense_updated' then
+      old_ids := coalesce(new.data->'old'->'split', '{}'::jsonb)
+              || case when jsonb_typeof(new.data->'old'->'payers') = 'object' then new.data->'old'->'payers' else jsonb_build_object(new.data->'old'->>'paid_by', 0) end;
+    end if;
+    for m in
+      select gm.* from public.group_members gm
+       where gm.group_id = new.group_id
+         and (pay ? gm.id::text or spl ? gm.id::text or old_ids ? gm.id::text)
+         and gm.user_id is distinct from new.actor
+         -- Invited people without an account only get an email for new expenses.
+         and (gm.user_id is not null or (gm.email is not null and new.kind = 'expense_added'))
+    loop
+      insert into public.notifications (user_id, email, kind, group_id, expense_id, actor, data)
+      values (m.user_id, case when m.user_id is null then m.email end, new.kind, new.group_id, new.expense_id, new.actor,
+        jsonb_build_object('actor', who, 'group', g.name, 'is_direct', g.is_direct, 'description', e->>'description',
+          'expense_kind', e->>'kind', 'amount', (e->>'amount')::bigint, 'currency', coalesce(e->>'currency', g.currency),
+          'net', coalesce((pay->>m.id::text)::bigint, 0) - coalesce((spl->>m.id::text)::bigint, 0),
+          'removed', not (pay ? m.id::text or spl ? m.id::text),
+          'body', new.data->>'body', 'name', m.name));
+    end loop;
+
+  elsif new.kind = 'member_joined' and (new.data->>'user') is not null and (new.data->>'user')::uuid is distinct from new.actor then
+    -- Someone added a person who already has an account.
+    insert into public.notifications (user_id, kind, group_id, actor, data)
+      values ((new.data->>'user')::uuid, 'added_to_group', new.group_id, new.actor,
+              jsonb_build_object('actor', who, 'group', g.name, 'is_direct', g.is_direct));
+
+  elsif new.kind = 'member_added' and (new.data->>'email') is not null
+        and not exists (select 1 from auth.users u where lower(u.email) = lower(new.data->>'email') and u.email_confirmed_at is not null) then
+    -- An invite email for someone not on Evenly yet.
+    insert into public.notifications (email, kind, group_id, actor, data)
+      values (new.data->>'email', 'invited', new.group_id, new.actor,
+              jsonb_build_object('actor', who, 'group', g.name, 'is_direct', g.is_direct, 'name', new.data->>'name'));
+  end if;
+  return new;
+end $$;
+drop trigger if exists activity_notifications on public.activity;
+create trigger activity_notifications after insert on public.activity for each row execute function public.queue_notifications();
+
+-- Nudge someone who owes you. At most one reminder per person per group per day.
+create or replace function public.send_reminder(p_group uuid, p_member uuid, p_amount bigint, p_currency text)
+returns void language plpgsql security definer set search_path = public as $$
+declare
+  m public.group_members;
+  g public.groups;
+begin
+  if not public.is_member(p_group) then raise exception 'Not a member of this group'; end if;
+  select * into m from public.group_members where id = p_member and group_id = p_group;
+  select * into g from public.groups where id = p_group;
+  if m.id is null then raise exception 'That person isn''t in this group.'; end if;
+  if m.user_id = auth.uid() then raise exception 'You can''t remind yourself.'; end if;
+  if m.user_id is null and m.email is null then raise exception 'Add an email for this person first, so Evenly can reach them.'; end if;
+  if exists (select 1 from public.notifications where kind = 'reminder' and group_id = p_group and actor = auth.uid()
+             and (data->>'member')::uuid = p_member and created_at > now() - interval '20 hours') then
+    raise exception 'You already reminded them today. Try again tomorrow.';
+  end if;
+  insert into public.notifications (user_id, email, kind, group_id, actor, data)
+    values (m.user_id, case when m.user_id is null then m.email end, 'reminder', p_group, auth.uid(),
+            jsonb_build_object('actor', public.display_name(p_group, auth.uid()), 'group', g.name, 'is_direct', g.is_direct,
+                               'amount', p_amount, 'currency', p_currency, 'member', p_member, 'name', m.name));
+end $$;
+revoke all on function public.send_reminder(uuid, uuid, bigint, text) from public, anon;
+grant execute on function public.send_reminder(uuid, uuid, bigint, text) to authenticated;
+revoke all on function public.display_name(uuid, uuid) from public, anon;
+
+-- ---------- delivery: each new notification is handed to the "notify" Edge Function ----------
+do $$ begin
+  create extension if not exists pg_net;
+exception when others then raise notice 'pg_net is not available here; notifications stay in the app only.';
+end $$;
+
+create schema if not exists private;
+revoke all on schema private from public, anon, authenticated;
+create table if not exists private.settings (key text primary key, value text not null);
+-- Only the database itself reads this (as its owner); nobody else can, even through the API.
+alter table private.settings enable row level security;
+-- The address of your notify Edge Function. Change the project id if you copy Evenly to another Supabase project.
+insert into private.settings (key, value) values ('notify_url', 'https://kdikawdhbwpqdcialyky.supabase.co/functions/v1/notify')
+  on conflict (key) do update set value = excluded.value;
+
+create or replace function public.deliver_notification()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare url text;
+begin
+  if to_regproc('net.http_post') is null then return new; end if;
+  select value into url from private.settings where key = 'notify_url';
+  if url is null then return new; end if;
+  perform net.http_post(url := url, body := jsonb_build_object('id', new.id), headers := '{"Content-Type": "application/json"}'::jsonb);
+  return new;
+exception when others then
+  -- Never block saving an expense because a notification couldn't be sent.
+  return new;
+end $$;
+drop trigger if exists notifications_deliver on public.notifications;
+create trigger notifications_deliver after insert on public.notifications for each row execute function public.deliver_notification();
+
+-- ---------- receipts bucket: private, only group members can see or change ----------
+do $$
+begin
+  if to_regclass('storage.buckets') is null then return; end if;
+  insert into storage.buckets (id, name, public) values ('receipts', 'receipts', false) on conflict (id) do nothing;
+  execute 'drop policy if exists "evenly receipts" on storage.objects';
+  execute $p$create policy "evenly receipts" on storage.objects for all to authenticated
+    using (bucket_id = 'receipts' and public.is_member_text((storage.foldername(name))[1]))
+    with check (bucket_id = 'receipts' and public.is_member_text((storage.foldername(name))[1]))$p$;
+end $$;
+
 -- ---------- live updates ----------
 do $$
 declare t text;
 begin
-  foreach t in array array['groups', 'group_members', 'expenses', 'comments', 'activity', 'profiles'] loop
+  foreach t in array array['groups', 'group_members', 'expenses', 'comments', 'activity', 'profiles', 'notifications'] loop
     if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
       execute format('alter publication supabase_realtime add table public.%I', t);
     end if;

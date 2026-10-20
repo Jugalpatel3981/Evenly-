@@ -1,10 +1,11 @@
 // Startup, sign-in and every click on the page.
 import { S, sb, uid, myName, myProfile, onChange, loadAll, scheduleReload, setToast, friendly, run, ls } from './state.js';
+import { pushStatus, enablePush, disablePush } from './push.js';
 import { validEmail, appUrl } from './util.js';
 import { $, toast, initSheet, busy, resizeImage, copyText } from './ui.js';
 import { renderSetup, renderAuth, renderRecovery, renderApp } from './views.js';
 import { openExpenseSheet, openPickSheet, expenseWithFriend, openExpenseDetail, openSettleSheet, openDeletedSheet,
-         restoreExpense, openGroupSheet, openFriendSheet, openJoinSheet, copySummary } from './sheets.js';
+         restoreExpense, openGroupSheet, openFriendSheet, openJoinSheet, copySummary, sendReminder } from './sheets.js';
 
 setToast(toast);
 initSheet();
@@ -12,7 +13,7 @@ initSheet();
 function render(){
   const app = $('#app');
   // Keep typing in the whiteboard and settings fields when live updates re-render the page.
-  const keep = document.activeElement && ['boardText', 'sName', 'sEmail', 'sPass', 'sDel'].includes(document.activeElement.id) ? document.activeElement.id : null;
+  const keep = document.activeElement && ['boardText', 'sName', 'sEmail', 'sPass', 'sDel', 'sUpi', 'sPaypal', 'sVenmo'].includes(document.activeElement.id) ? document.activeElement.id : null;
   if (keep && S.view !== 'home') return;
   if (!sb) app.innerHTML = renderSetup();
   else if (S.recovery) app.innerHTML = renderRecovery();
@@ -26,6 +27,33 @@ const m = location.hash.match(/^#join-([a-f0-9]{8,32})$/i);
 if (m) {
   S.pendingInvite = m[1]; ls.set('evenly.invite', m[1]);
   history.replaceState(null, '', location.pathname + location.search);
+}
+/* ---------- links from notifications: #open-<expense> or #group-<group> ---------- */
+let pendingOpen = null;
+function readTarget(hash){
+  const t = String(hash || '').match(/#(open|group)-([0-9a-f-]{36})/i);
+  return t ? {type: t[1], id: t[2]} : null;
+}
+pendingOpen = readTarget(location.hash);
+if (pendingOpen) history.replaceState(null, '', location.pathname + location.search);
+function openTarget(t){
+  if (!t || !S.ready) { pendingOpen = t; return; }
+  pendingOpen = null;
+  if (t.type === 'open' && S.expenses[t.id]) { const e = S.expenses[t.id]; go('group', {gid: e.group_id, tab: 'expenses'}); openExpenseDetail(t.id); }
+  else if (t.type === 'group' && S.groups[t.id]) go('group', {gid: t.id, tab: 'expenses'});
+  else if (t.type === 'open') { go('notifications'); toast('That expense has been deleted.'); }
+}
+// A tapped notification while Evenly is already open: the service worker hands over the link.
+navigator.serviceWorker?.addEventListener('message', ev => { if (ev.data?.type === 'open') openTarget(readTarget(ev.data.url)); });
+window.addEventListener('hashchange', () => { const t = readTarget(location.hash); if (t) { history.replaceState(null, '', location.pathname); openTarget(t); } });
+
+async function refreshPush(){ S.pushStatus = await pushStatus(); render(); }
+async function markRead(){
+  if (!S.notifications.some(n => !n.read_at)) return;
+  const at = new Date().toISOString();
+  S.notifications.forEach(n => { if (!n.read_at) n.read_at = at; });
+  render();
+  await sb.from('notifications').update({read_at: at}).is('read_at', null);
 }
 
 /* ---------- boot after sign-in ---------- */
@@ -46,7 +74,9 @@ async function boot(){
   channel = sb.channel('evenly-' + uid())
     .on('postgres_changes', {event: '*', schema: 'public'}, scheduleReload)
     .subscribe();
+  refreshPush();
   if (S.pendingInvite) openJoinSheet(S.pendingInvite);
+  else if (pendingOpen) openTarget(pendingOpen);
 }
 function teardown(){
   booted = null;
@@ -120,6 +150,14 @@ async function onSettingsSubmit(id, ev){
     if (error) return toast(friendly(error));
     await sb.auth.signOut();
     toast('Your account has been deleted');
+  } else if (id === 'payForm') {
+    const upi = $('#sUpi').value.trim(), paypal = $('#sPaypal').value.trim().replace(/^.*paypal\.me\//i, '').replace(/\/.*$/, ''), venmo = $('#sVenmo').value.trim().replace(/^@/, '');
+    if (upi && !/^[A-Za-z0-9._-]{2,64}@[A-Za-z0-9.-]{2,64}$/.test(upi)) return toast('A UPI ID looks like name@bank, for example jugal@okaxis.');
+    if (paypal && !/^[A-Za-z0-9]{1,40}$/.test(paypal)) return toast('Enter just your PayPal.me username, letters and numbers only.');
+    if (venmo && !/^[A-Za-z0-9_-]{1,40}$/.test(venmo)) return toast('Enter just your Venmo username, without the @.');
+    busy(form, true);
+    await run(sb.from('profiles').upsert({id: uid(), name: myName(), upi_id: upi || null, paypal_me: paypal || null, venmo: venmo || null}, {onConflict: 'id'}), 'Payment details saved');
+    busy(form, false);
   } else if (id === 'boardForm') {
     const g = S.groups[S.gid]; if (!g) return;
     busy(form, true);
@@ -160,6 +198,11 @@ $('#app').addEventListener('click', ev => {
     case 'home-tab': S.homeTab = el.dataset.tab; ls.set('evenly.homeTab', S.homeTab); render(); break;
     case 'tab': S.tab = el.dataset.tab; render(); break;
     case 'settings': go('settings'); break;
+    case 'notifications': go('notifications'); markRead(); break;
+    case 'push-on': enablePush().then(() => { ls.set('evenly.pushAsked', '1'); toast('Notifications are on for this device'); }, err => toast(friendly(err))).finally(refreshPush); break;
+    case 'push-off': disablePush().then(() => toast('Notifications are off for this device'), err => toast(friendly(err))).finally(refreshPush); break;
+    case 'push-later': ls.set('evenly.pushAsked', '1'); render(); break;
+    case 'remind': sendReminder(el.dataset.gid, el.dataset.member, el.dataset.amt, el.dataset.cur); break;
     case 'signout': sb.auth.signOut(); break;
     case 'copy-app': copyText(location.origin, 'Copy the Evenly link'); break;
     case 'remove-avatar': run(sb.from('profiles').update({avatar_url: null}).eq('id', uid()), 'Photo removed'); break;
@@ -186,10 +229,11 @@ $('#app').addEventListener('submit', ev => {
   const id = ev.target.id;
   if (id === 'authForm') onAuthSubmit(ev);
   else if (id === 'recForm') onRecoverySubmit(ev);
-  else if (['nameForm', 'emailForm', 'passForm', 'deleteForm', 'boardForm'].includes(id)) onSettingsSubmit(id, ev);
+  else if (['nameForm', 'emailForm', 'passForm', 'deleteForm', 'boardForm', 'payForm'].includes(id)) onSettingsSubmit(id, ev);
 });
 $('#app').addEventListener('change', ev => {
   if (ev.target.id === 'avatarFile' && ev.target.files[0]) onAvatar(ev.target.files[0]);
+  if (ev.target.id === 'sEmailNotes') run(sb.from('profiles').upsert({id: uid(), name: myName(), notify_email: ev.target.checked}, {onConflict: 'id'}), ev.target.checked ? 'Email notifications on' : 'Email notifications off');
   if (ev.target.id === 'sCur') run(sb.from('profiles').upsert({id: uid(), name: myName(), default_currency: ev.target.value}, {onConflict: 'id'}), 'Default currency saved');
 });
 

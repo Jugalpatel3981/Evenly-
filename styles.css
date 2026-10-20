@@ -192,3 +192,18 @@ code.grow{flex:1;min-width:0;overflow-wrap:anywhere;padding:8px 10px;border-radi
 .seg button .i{vertical-align:-2px}
 .ms input[type="text"]{width:96px}
 @media (max-width:440px){ .me-name{display:none} .me-btn{padding:3px} }
+
+/* ---------- phase 3 ---------- */
+.top-actions{display:flex;align-items:center;gap:6px}
+.bell{position:relative;color:var(--ink)}
+.dot-count{position:absolute;top:0;right:0;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--owe);color:#fff;font-size:11px;font-weight:800;display:grid;place-items:center;box-sizing:border-box;border:2px solid var(--bg)}
+.row.unread{background:color-mix(in oklab, var(--accent) 7%, var(--surface))}
+.row.unread .ico{box-shadow:0 0 0 2px var(--accent)}
+.push-banner{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.push-banner>span:first-of-type{flex:1 1 200px}
+.nowrap{flex-wrap:nowrap}
+.wrapflex{flex-wrap:wrap;align-items:center}
+.receipt{display:flex;flex-direction:column;gap:6px;color:var(--accent);font-weight:650;text-decoration:none;font-size:14px}
+.receipt img{max-width:100%;max-height:280px;object-fit:contain;border-radius:12px;border:1px solid var(--line);background:var(--bg);align-self:flex-start}
+a.btn{text-decoration:none;color:inherit}
+a.btn.primary{color:var(--accent-ink)}
