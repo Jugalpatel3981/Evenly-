@@ -350,3 +350,15 @@ dialog#sheet.full #sheetBody{height:100%}
 .cc-bar i{display:block;height:100%;background:var(--c);border-radius:5px}
 /* The split summary repeats "(₹x/person)" while the split details are closed. */
 #splitPanel[hidden] ~ #eHint.ok{display:none}
+
+/* comment thread: people's comments as bubbles, changes as small inline notes */
+.thread{display:flex;flex-direction:column;gap:10px}
+.msg{display:flex;gap:8px;align-items:flex-start}
+.msg .bubble{background:var(--surface);border:1px solid var(--line);border-radius:4px 14px 14px 14px;padding:8px 12px;max-width:85%;min-width:0}
+.msg.mine{flex-direction:row-reverse}
+.msg.mine .bubble{background:color-mix(in oklab, var(--accent) 12%, var(--surface));border-radius:14px 4px 14px 14px}
+.msg .bubble .sub{font-size:12px;color:var(--muted)}
+.sysmsg{display:flex;gap:6px;align-items:flex-start;font-size:13px;color:var(--muted);padding:2px 4px}
+.sysmsg .i{margin-top:2px;flex:none}
+.sysmsg b{color:var(--ink);font-weight:650}
+.comment-box{position:sticky;bottom:0;background:var(--surface);padding-block:8px calc(8px + env(safe-area-inset-bottom, 0px));margin-inline:-16px;padding-inline:16px;border-top:1px solid var(--line)}
