@@ -5,7 +5,7 @@ import { validEmail, appUrl } from './util.js';
 import { $, toast, initSheet, busy, resizeImage, copyText } from './ui.js';
 import { renderSetup, renderAuth, renderRecovery, renderApp } from './views.js';
 import { openExpenseSheet, openPickSheet, expenseWithFriend, openExpenseDetail, openSettleSheet, openDeletedSheet,
-         restoreExpense, openGroupSheet, openFriendSheet, openJoinSheet, openInviteSheet, copySummary, sendReminder } from './sheets.js';
+         restoreExpense, openGroupSheet, openFriendSheet, openJoinSheet, openInviteSheet, copySummary, sendReminder, openSearchSheet, openFilterSheet } from './sheets.js';
 
 setToast(toast);
 initSheet();
@@ -41,7 +41,7 @@ function openTarget(t){
   pendingOpen = null;
   if (t.type === 'open' && S.expenses[t.id]) { const e = S.expenses[t.id]; go('group', {gid: e.group_id, tab: 'expenses'}); openExpenseDetail(t.id); }
   else if (t.type === 'group' && S.groups[t.id]) go('group', {gid: t.id, tab: 'expenses'});
-  else if (t.type === 'open') { go('notifications'); toast('That expense has been deleted.'); }
+  else if (t.type === 'open') { S.homeTab = 'activity'; go('home'); toast('That expense has been deleted.'); }
 }
 // A tapped notification while Evenly is already open: the service worker hands over the link.
 navigator.serviceWorker?.addEventListener('message', ev => { if (ev.data?.type === 'open') openTarget(readTarget(ev.data.url)); });
@@ -180,6 +180,13 @@ async function onAvatar(file){
 
 /* ---------- clicks ---------- */
 const go = (view, extra = {}) => { Object.assign(S, {view}, extra); render(); window.scrollTo(0, 0); };
+function openFriend(key){
+  const ledger = Object.values(S.groups).find(x => x.is_direct && (S.members[x.id] || []).some(mm => mm.user_id !== uid() &&
+    (key === 'u:' + mm.user_id || key === 'e:' + (mm.email || '').toLowerCase() || key === 'd:' + x.id)));
+  ledger ? go('group', {gid: ledger.id, tab: 'expenses'}) : go('friend', {fkey: key});
+}
+// The search sheet asks for a friend's page this way.
+$('#app').addEventListener('evenly-open', ev => { if (ev.detail?.friend) openFriend(ev.detail.friend); });
 $('#app').addEventListener('click', ev => {
   const au = ev.target.closest('[data-auth]');
   if (au) { S.authMode = au.dataset.auth; render(); $('#aEmail')?.focus(); return; }
@@ -187,18 +194,15 @@ $('#app').addEventListener('click', ev => {
   const a = el.dataset.act, g = S.groups[S.gid];
   switch (a) {
     case 'open-group': go('group', {gid: el.dataset.id, tab: 'expenses'}); break;
-    case 'open-friend': {
-      const key = el.dataset.key;
-      const ledger = Object.values(S.groups).find(x => x.is_direct && (S.members[x.id] || []).some(mm => mm.user_id !== uid() &&
-        (key === 'u:' + mm.user_id || key === 'e:' + (mm.email || '').toLowerCase() || key === 'd:' + x.id)));
-      ledger ? go('group', {gid: ledger.id, tab: 'expenses'}) : go('friend', {fkey: key});
-      break;
-    }
+    case 'open-friend': openFriend(el.dataset.key); break;
     case 'home': S.homeTab = g?.is_direct || S.view === 'friend' ? 'friends' : S.view === 'group' ? 'groups' : S.homeTab; go('home'); break;
-    case 'home-tab': S.homeTab = el.dataset.tab; ls.set('evenly.homeTab', S.homeTab); render(); break;
+    case 'home-tab': S.homeTab = el.dataset.tab; if (S.homeTab !== 'account') ls.set('evenly.homeTab', S.homeTab); go('home'); if (S.homeTab === 'activity' && S.actTab === 'foryou') markRead(); break;
+    case 'act-tab': S.actTab = el.dataset.tab; render(); if (S.actTab === 'foryou') markRead(); break;
+    case 'search': openSearchSheet(); break;
+    case 'filter': openFilterSheet(); break;
     case 'tab': S.tab = el.dataset.tab; render(); break;
-    case 'settings': go('settings'); break;
-    case 'notifications': go('notifications'); markRead(); break;
+    case 'settings': S.homeTab = 'account'; go('home'); break;
+    case 'notifications': S.homeTab = 'activity'; S.actTab = 'foryou'; go('home'); markRead(); break;
     case 'push-on': enablePush().then(() => { ls.set('evenly.pushAsked', '1'); toast('Notifications are on for this device'); }, err => toast(friendly(err))).finally(refreshPush); break;
     case 'push-off': disablePush().then(() => toast('Notifications are off for this device'), err => toast(friendly(err))).finally(refreshPush); break;
     case 'push-later': ls.set('evenly.pushAsked', '1'); render(); break;

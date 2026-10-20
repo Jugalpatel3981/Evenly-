@@ -1,14 +1,19 @@
 // Screens. Each returns HTML for #app; clicks are handled in main.js through data-act attributes.
+// Layout: a bottom tab bar (Groups, Friends, Activity, Account) on the home screens, and pages
+// for a group or friend with a banner, a big avatar, one-line balances and a row of pill buttons.
 import { S, uid, myName, myProfile, unreadCount, member, groupList, membersOf, expOf, nameOf, myId, friendOf, titleOf,
          personName, avatarUrl, groupBalances, myBalance, friendsIndex } from './state.js';
 import { esc, fmt, fmtMulti, ago } from './util.js';
-import { simplify, pairwise, payersOf, curOf } from './money.js';
+import { simplify, pairwise, payersOf, curOf, between } from './money.js';
 import { catOf, CATEGORY_GROUPS, typeOf } from './categories.js';
 import { icon } from './icons.js';
 import { avatar, catIcon, payIcon, balanceLines, currencyOptions } from './ui.js';
 import { noteText, noteIcon } from './messages.js';
 
+// nameOf() gives "You"; in the middle of a sentence it should read "you".
+const nm = (gid, id) => { const n = nameOf(gid, id); return n === 'You' ? 'you' : n; };
 const brand = `<div class="brand"><span class="mark" aria-hidden="true">E</span>Evenly</div>`;
+const chev = `<span class="chev" aria-hidden="true">${icon('chevron-right', 18)}</span>`;
 
 export function renderSetup(){
   return `<header class="top">${brand}</header><div class="empty"><h1>Almost there</h1>
@@ -43,16 +48,23 @@ export function renderRecovery(){
     <button class="btn primary" type="submit" style="justify-content:center">Save password</button></form></div>`;
 }
 
-function topBar(){
-  const p = myProfile();
+/* ---------- app shell ---------- */
+const TABS = [['groups', 'Groups', 'users'], ['friends', 'Friends', 'user'], ['activity', 'Activity', 'activity'], ['account', 'Account', 'circle-user']];
+function tabBar(){
   const n = unreadCount();
-  return `<header class="top">${brand}<span class="top-actions">
-    <button class="btn ghost icon-btn bell" data-act="notifications" aria-label="Notifications${n ? `, ${n} unread` : ''}">${icon('bell', 22)}${n ? `<span class="dot-count">${n > 99 ? '99+' : n}</span>` : ''}</button>
-    <button class="me-btn" data-act="settings" aria-label="Account settings">${avatar(myName(), p?.avatar_url)}<span class="me-name">${esc(myName())}</span></button></span></header>`;
+  return `<nav class="tabbar" aria-label="Main">${TABS.map(([k, l, ic]) => `<button class="tabbar-btn" data-act="home-tab" data-tab="${k}" aria-current="${S.homeTab === k ? 'page' : 'false'}">
+    <span class="tb-ico">${k === 'account' && myProfile()?.avatar_url ? avatar(myName(), myProfile().avatar_url, 'av tiny') : icon(ic, 22)}${k === 'activity' && n ? `<span class="dot-count">${n > 99 ? '99+' : n}</span>` : ''}</span>
+    <span>${l}</span></button>`).join('')}</nav>`;
 }
+const appBar = (left, right) => `<header class="appbar">${left || '<span></span>'}${right || '<span></span>'}</header>`;
+const searchBtn = `<button class="btn ghost icon-btn" data-act="search" aria-label="Search">${icon('search', 22)}</button>`;
+const fab = act => `<button class="fab" data-act="${act}">${icon('receipt', 20)} Add expense</button>`;
 
 export function renderApp(){
-  if (!S.ready) return topBar() + `<p class="loading">Opening your balances…</p>`;
+  if (!S.ready) return `<p class="loading">Opening your balances…</p>`;
+  if (S.view === 'settings') { S.view = 'home'; S.homeTab = 'account'; }
+  if (S.view === 'notifications') { S.view = 'home'; S.homeTab = 'activity'; S.actTab = 'foryou'; }
+  if (!TABS.some(t => t[0] === S.homeTab)) S.homeTab = 'friends';
   if (S.view === 'group' && !S.groups[S.gid]) S.view = 'home';
   if (S.view === 'friend') {
     const f = friendsIndex().get(S.fkey);
@@ -60,101 +72,150 @@ export function renderApp(){
     if (!f) S.view = 'home';
     else if (f.ledger) Object.assign(S, {view: 'group', gid: f.ledger, tab: 'expenses'});
   }
-  const body = S.view === 'group' ? renderGroup(S.groups[S.gid])
-             : S.view === 'friend' ? renderFriendOnly(friendsIndex().get(S.fkey))
-             : S.view === 'settings' ? renderSettings()
-             : S.view === 'notifications' ? renderNotifications()
-             : renderHome();
-  return topBar() + body;
+  document.body.classList.toggle('with-tabbar', S.view === 'home');
+  if (S.view === 'group') return renderGroup(S.groups[S.gid]);
+  if (S.view === 'friend') return renderFriendOnly(friendsIndex().get(S.fkey));
+  const t = S.homeTab;
+  const body = t === 'groups' ? renderGroupsTab() : t === 'activity' ? renderActivityTab() : t === 'account' ? renderSettings() : renderFriendsTab();
+  return body + (t === 'account' ? '' : fab('pick-exp')) + tabBar();
 }
 
-/* ---------- home ---------- */
+/* ---------- balances shown as one-liners ---------- */
 function totals(){
-  let owed = {}, owe = {};
+  const owed = {}, owe = {};
   for (const g of Object.values(S.groups)) {
     for (const [c, v] of Object.entries(myBalance(g.id))) { if (v > 0) owed[c] = (owed[c] || 0) + v; else owe[c] = (owe[c] || 0) - v; }
   }
   return {owed, owe};
 }
-function renderHome(){
-  const gs = groupList(), groups = gs.filter(g => !g.is_direct);
+function totalCard(){
+  const {owed, owe} = totals();
+  const any = Object.keys(owed).length || Object.keys(owe).length;
+  const filt = FILTERS.find(f => f[0] === S.filter) || FILTERS[0];
+  return `<div class="total-card"><div class="tc-mark" aria-hidden="true">${icon('wallet', 26)}</div>
+    <div class="tc-text"><div class="tc-lbl">Total balance</div>
+      ${Object.keys(owe).length ? `<div class="neg">You owe ${fmtMulti(owe)}</div>` : ''}
+      ${Object.keys(owed).length ? `<div class="pos">You are owed ${fmtMulti(owed)}</div>` : ''}
+      ${any ? '' : `<div class="muted">You’re all settled up</div>`}</div>
+    <button class="btn ghost icon-btn tc-filter${S.filter && S.filter !== 'all' ? ' on' : ''}" data-act="filter" aria-label="Filter: ${filt[1]}">${icon('sliders-horizontal', 20)}</button></div>`;
+}
+export const FILTERS = [['all', 'All'], ['outstanding', 'Outstanding balances'], ['owe', 'People you owe'], ['owed', 'People who owe you']];
+const passes = map => {
+  const v = Object.values(map || {});
+  switch (S.filter) {
+    case 'outstanding': return v.some(x => x);
+    case 'owe': return v.some(x => x < 0);
+    case 'owed': return v.some(x => x > 0);
+    default: return true;
+  }
+};
+// "Bina owes you ₹300" / "You owe Ravi ₹50" for one person, per currency.
+function personLine(name, amt, where = ''){
+  return Object.entries(amt).filter(([, v]) => v).map(([c, v]) => v > 0
+    ? `<span class="line">${esc(name)} owes you <b class="pos">${fmt(v, c)}</b>${where}</span>`
+    : `<span class="line">You owe ${esc(name)} <b class="neg">${fmt(v, c)}</b>${where}</span>`).join('');
+}
+// My one-liners for a group: what each member and I owe each other.
+function groupLines(g, max = 3){
+  const me = myId(g.id); if (!me) return [];
+  const exps = expOf(g.id), out = [];
+  for (const m of membersOf(g.id)) {
+    if (m.id === me) continue;
+    const l = personLine(personName(m), between(exps, g, me, m.id));
+    if (l) out.push(l);
+  }
+  return out.length > max ? [...out.slice(0, max), `<span class="line muted">Plus ${out.length - max} more balance${out.length - max > 1 ? 's' : ''}</span>`] : out;
+}
+const rightLabel = (map, they = 'owes you') => {
+  const vals = Object.entries(map || {}).filter(([, v]) => v);
+  if (!vals.length) return `<span class="amt"><span class="muted">settled up</span></span>`;
+  return `<span class="amt">${balanceLines(map, {they, you: 'you owe'})}</span>`;
+};
+
+/* ---------- Friends tab ---------- */
+function renderFriendsTab(){
   const friends = [...friendsIndex().values()].sort((a, b) => {
     const za = !Object.values(a.total).some(v => v), zb = !Object.values(b.total).some(v => v);
     return za - zb || a.name.localeCompare(b.name);
   });
-  const tab = S.homeTab;
-  const {owed, owe} = totals();
-  const stats = gs.length ? `<div class="stats">
-      <div class="stat"><div class="lbl">You get back</div><div class="val pos">${fmtMulti(owed) || fmt(0, myProfile()?.default_currency || 'INR')}</div></div>
-      <div class="stat"><div class="lbl">You owe</div><div class="val neg">${fmtMulti(owe) || fmt(0, myProfile()?.default_currency || 'INR')}</div></div></div>` : '';
-  const tabs = `<div class="tabs" role="tablist">
-    ${[['friends', `Friends${friends.length ? ` (${friends.length})` : ''}`], ['groups', `Groups${groups.length ? ` (${groups.length})` : ''}`], ['activity', 'Activity']]
-      .map(([k, l]) => `<button class="tab" role="tab" aria-selected="${tab === k}" data-act="home-tab" data-tab="${k}">${l}</button>`).join('')}</div>`;
-  let body;
-  if (tab === 'friends') {
-    body = friends.length ? `<div class="section-h"><h3 style="margin:0">Friends</h3><button class="btn sm" data-act="new-friend">${icon('user-plus', 16)} Add friend</button></div>
-      <div class="list">${friends.map(f => `<button class="row" data-act="open-friend" data-key="${esc(f.key)}">
-        ${avatar(f.name, f.userId && S.profiles[f.userId]?.avatar_url)}
-        <span class="main"><span class="title">${esc(f.name)}</span><span class="sub">${esc(friendSub(f))}</span></span>
-        <span class="amt">${balanceLines(f.total)}</span></button>`).join('')}</div>`
-      : `<div class="empty"><h2>Split with one friend</h2>
-        <p>Paid for a friend’s coffee or a cab? Add them here and keep track between just the two of you, no group needed. Add their email so they can sign in and see it too.</p>
-        <button class="btn primary" data-act="new-friend">Add a friend</button></div>`;
-  } else if (tab === 'groups') {
-    body = groups.length ? `<div class="section-h"><h3 style="margin:0">Groups</h3><button class="btn sm" data-act="new-group">${icon('plus', 16)} New group</button></div>
-      <div class="list">${groups.map(g => {
-        const t = typeOf(g.type);
-        return `<button class="row" data-act="open-group" data-id="${esc(g.id)}">
-        ${g.cover_url ? `<span class="av lg photo" aria-hidden="true"><img src="${esc(g.cover_url)}" alt="" loading="lazy"></span>` : `<span class="av lg type-${t[0]}" aria-hidden="true">${icon(t[2], 20)}</span>`}
-        <span class="main"><span class="title">${esc(g.name)}</span>
-        <span class="sub">${membersOf(g.id).length} people · ${t[1]}</span></span>
-        <span class="amt">${balanceLines(myBalance(g.id), {they: 'you get back'})}</span></button>`; }).join('')}</div>`
-      : `<div class="empty"><h2>Split with a group</h2>
-        <p>Make a group for a trip, your flat or a dinner. Everyone you add by email, or with an invite link, sees the same expenses and balances.</p>
-        <button class="btn primary" data-act="new-group">Create a group</button></div>`;
-  } else {
-    body = renderActivityFeed(S.activity);
-  }
-  const greet = gs.length ? '' : `<p class="muted" style="margin:0">Hi ${esc(myName())}. If a friend already added you, it appears here automatically.</p>`;
-  return `<h1>${gs.length ? 'Your balances' : 'Welcome to Evenly'}</h1>${greet}${pushBanner()}${stats}${tabs}${body}
-    <button class="btn primary fab" data-act="pick-exp">${icon('plus', 20)} Add expense</button>`;
-}
-function friendSub(f){
-  const bits = [];
-  if (f.ledger) bits.push(f.userId ? 'Friend' : f.email ? 'Invited' : 'Not on Evenly');
-  if (f.groups.length) bits.push(`${f.groups.length} shared group${f.groups.length > 1 ? 's' : ''}`);
-  return bits.join(' · ') || 'Friend';
+  const shown = friends.filter(f => passes(f.total));
+  const bar = appBar(searchBtn, `<button class="btn ghost bar-action" data-act="new-friend">${icon('user-plus', 18)} Add friends</button>`);
+  if (!friends.length) return bar + `<h1 class="page-title">Friends</h1>${pushBanner()}<div class="empty"><h2>Split with one friend</h2>
+    <p>Paid for a friend’s coffee or a cab? Add them and keep track between just the two of you, no group needed.</p>
+    <button class="btn primary" data-act="new-friend">${icon('user-plus', 16)} Add a friend</button></div>`;
+  return bar + `<h1 class="page-title">Friends</h1>${pushBanner()}${totalCard()}
+    <div class="list plain">${shown.map(f => {
+      const inGroups = f.groups.filter(x => Object.values(x.amt).some(v => v));
+      const direct = f.ledger && inGroups.length ? personLine(f.name, myBalance(f.ledger), ` <span class="muted">outside groups</span>`) : '';
+      const groupLinesHtml = direct + inGroups.slice(0, 2).map(x => personLine(f.name, x.amt, ` <span class="muted">in ${esc(S.groups[x.gid].name)}</span>`)).join('');
+      return `<button class="row frow" data-act="open-friend" data-key="${esc(f.key)}">
+        ${avatar(f.name, f.userId && S.profiles[f.userId]?.avatar_url, 'av md')}
+        <span class="main"><span class="title">${esc(f.name)}</span>${f.userId ? '' : `<span class="sub">${f.email ? 'Invited' : 'Not on Evenly yet'}</span>`}${groupLinesHtml ? `<span class="lines">${groupLinesHtml}</span>` : ''}</span>
+        ${rightLabel(f.total)}${chev}</button>`; }).join('') || `<div class="row static muted">Nobody matches this filter.</div>`}</div>`;
 }
 
-/* ---------- activity feed ---------- */
+/* ---------- Groups tab ---------- */
+function groupAvatar(g, cls = 'gav'){
+  const t = typeOf(g.type);
+  return g.cover_url ? `<span class="${cls} photo" aria-hidden="true"><img src="${esc(g.cover_url)}" alt="" loading="lazy"></span>`
+                     : `<span class="${cls} type-${t[0]}" aria-hidden="true">${icon(t[2], cls === 'gav' ? 24 : 34)}</span>`;
+}
+function renderGroupsTab(){
+  const groups = groupList().filter(g => !g.is_direct);
+  const bar = appBar(searchBtn, `<button class="btn ghost bar-action" data-act="new-group">${icon('users', 18)} Create group</button>`);
+  if (!groups.length) return bar + `<h1 class="page-title">Groups</h1>${pushBanner()}<div class="empty"><h2>Split with a group</h2>
+    <p>Make a group for a trip, your flat or a dinner. Everyone you add sees the same expenses and balances.</p>
+    <button class="btn primary" data-act="new-group">${icon('plus', 16)} Create a group</button></div>`;
+  const shown = groups.filter(g => passes(myBalance(g.id)));
+  return bar + `<h1 class="page-title">Groups</h1>${pushBanner()}${totalCard()}
+    <div class="list plain">${shown.map(g => {
+      const lines = groupLines(g, 2);
+      const bal = myBalance(g.id);
+      const empty = !expOf(g.id).length;
+      return `<button class="row grow" data-act="open-group" data-id="${esc(g.id)}">${groupAvatar(g)}
+        <span class="main"><span class="title">${esc(g.name)}</span>
+        ${empty ? `<span class="sub">No expenses yet</span>` : lines.length ? `<span class="lines">${lines.join('')}</span>` : ''}</span>
+        ${empty ? '' : rightLabel(bal, 'you are owed')}${chev}</button>`; }).join('') || `<div class="row static muted">Nobody matches this filter.</div>`}</div>`;
+}
+
+/* ---------- Activity tab ---------- */
 function actorName(a){
   if (a.actor && a.actor === uid()) return 'You';
   const m = membersOf(a.group_id).find(x => x.user_id === a.actor);
   return (a.actor && S.profiles[a.actor]?.name) || m?.name || 'Someone';
 }
-function whereLabel(gid){
+function whereLabel(gid, a){
   const g = S.groups[gid]; if (!g) return '';
-  return g.is_direct ? `with ${esc(titleOf(g))}` : `in ${esc(g.name)}`;
+  if (!g.is_direct) return `in “${esc(g.name)}”`;
+  return a && a.actor && a.actor !== uid() ? '' : `with ${esc(titleOf(g))}`;
 }
 export function activityText(a){
-  const who = esc(actorName(a)), e = a.data?.new || a.data?.old || {};
+  const who = `<b>${esc(actorName(a))}</b>`, e = a.data?.new || a.data?.old || {};
   const what = e.kind === 'payment'
-    ? `a payment: ${esc(nameOf(a.group_id, e.paid_by))} paid ${esc(nameOf(a.group_id, Object.keys(e.split || {})[0]))}`
+    ? `a payment: ${esc(nameOf(a.group_id, e.paid_by))} paid ${esc(nm(a.group_id, Object.keys(e.split || {})[0]))}`
     : `“${esc(e.description)}”`;
   switch (a.kind) {
-    case 'expense_added': return `${who} added ${what} ${whereLabel(a.group_id)}`;
-    case 'expense_recurring': return `${what} repeated ${whereLabel(a.group_id)}`;
-    case 'expense_updated': return `${who} updated ${what} ${whereLabel(a.group_id)}`;
-    case 'expense_deleted': return `${who} deleted ${what} ${whereLabel(a.group_id)}`;
-    case 'expense_restored': return `${who} restored ${what} ${whereLabel(a.group_id)}`;
+    case 'expense_added': return `${who} added ${what} ${whereLabel(a.group_id, a)}`;
+    case 'expense_recurring': return `${what} repeated ${whereLabel(a.group_id, a)}`;
+    case 'expense_updated': return `${who} updated ${what} ${whereLabel(a.group_id, a)}`;
+    case 'expense_deleted': return `${who} deleted ${what} ${whereLabel(a.group_id, a)}`;
+    case 'expense_restored': return `${who} restored ${what} ${whereLabel(a.group_id, a)}`;
     case 'comment': return `${who} commented on “${esc(a.data?.description)}”: <span class="muted">${esc(a.data?.body)}</span>`;
-    case 'group_created': return `${who} created the group ${esc(a.data?.name)}`;
-    case 'friend_added': return who === 'You' ? `You started keeping track ${whereLabel(a.group_id)}` : `${who} added you as a friend`;
-    case 'member_added': return `${who} added ${esc(a.data?.name)} ${whereLabel(a.group_id)}`;
-    case 'member_joined': return `${esc(a.data?.name)} joined ${whereLabel(a.group_id)}`;
-    case 'member_left': return `${esc(a.data?.name)} left ${whereLabel(a.group_id)}`;
+    case 'group_created': return `${who} created the group “${esc(a.data?.name)}”`;
+    case 'friend_added': return actorName(a) === 'You' ? `You started keeping track ${whereLabel(a.group_id, a)}` : `${who} added you as a friend`;
+    case 'member_added': return `${who} added ${esc(a.data?.name)} ${whereLabel(a.group_id, a)}`;
+    case 'member_joined': return `<b>${esc(a.data?.name)}</b> joined ${whereLabel(a.group_id, a)}`;
+    case 'member_left': return `<b>${esc(a.data?.name)}</b> left ${whereLabel(a.group_id, a)}`;
     default: return '';
   }
+}
+// "You get back ₹300" / "You owe ₹300" under an expense in the feed, from my side.
+function activityImpact(a){
+  const e = a.data?.new; if (!e || !/expense_added|expense_restored|expense_recurring/.test(a.kind)) return '';
+  const g = S.groups[a.group_id], me = myId(a.group_id); if (!me) return '';
+  const cur = curOf(e, g), net = Number(payersOf(e)[me] || 0) - Number(e.split?.[me] || 0);
+  if (e.kind === 'payment') return '';
+  return net > 0 ? `<span class="pos">You get back ${fmt(net, cur)}</span>` : net < 0 ? `<span class="neg">You owe ${fmt(net, cur)}</span>` : '';
 }
 function activityIcon(a){
   const e = a.data?.new || a.data?.old;
@@ -167,73 +228,90 @@ function activityIcon(a){
 export function renderActivityFeed(list){
   const rows = list.filter(a => S.groups[a.group_id]).map(a => {
     const text = activityText(a); if (!text) return '';
-    const e = a.data?.new || a.data?.old;
     const exists = a.expense_id && S.expenses[a.expense_id];
-    const amount = e && a.kind !== 'comment' ? `<b class="num">${fmt(Number(e.amount), curOf(e, S.groups[a.group_id]))}</b>` : '';
     const restore = a.kind === 'expense_deleted' && !exists ? `<button class="btn sm" data-act="restore" data-id="${a.id}">${icon('rotate-ccw', 15)} Restore</button>` : '';
-    const [open, close] = exists ? [`<button class="row" data-act="open-exp" data-id="${esc(a.expense_id)}">`, '</button>'] : ['<div class="row static">', '</div>'];
+    const [open, close] = exists ? [`<button class="row arow" data-act="open-exp" data-id="${esc(a.expense_id)}">`, '</button>'] : ['<div class="row static arow">', '</div>'];
     return `${open}${activityIcon(a)}
-      <span class="main"><span class="wrap-text">${text}</span><span class="sub">${esc(ago(a.created_at))}</span></span>
-      <span class="amt">${amount}${restore}</span>${close}`;
+      <span class="main"><span class="wrap-text">${text}</span>${activityImpact(a) ? `<span class="wrap-text small">${activityImpact(a)}</span>` : ''}<span class="sub">${esc(ago(a.created_at))}</span></span>
+      ${restore ? `<span class="amt">${restore}</span>` : ''}${close}`;
   }).join('');
-  return rows ? `<div class="list">${rows}</div>` : `<div class="empty"><h2>Nothing yet</h2><p>Expenses, payments, comments and changes from all your friends and groups show up here.</p></div>`;
+  return rows ? `<div class="list plain">${rows}</div>` : `<div class="empty"><h2>Nothing yet</h2><p>Expenses, payments, comments and changes from all your friends and groups show up here.</p></div>`;
+}
+function renderActivityTab(){
+  const sub = S.actTab || 'all', n = unreadCount();
+  const seg = `<div class="seg wide" role="tablist">
+    <button type="button" data-act="act-tab" data-tab="all" aria-pressed="${sub === 'all'}">All activity</button>
+    <button type="button" data-act="act-tab" data-tab="foryou" aria-pressed="${sub === 'foryou'}">For you${n ? ` <span class="pill-count">${n}</span>` : ''}</button></div>`;
+  return appBar(searchBtn, '') + `<h1 class="page-title">Activity</h1>${pushBanner()}${seg}` + (sub === 'foryou' ? renderNotifications() : renderActivityFeed(S.activity));
+}
+function renderNotifications(){
+  const rows = S.notifications.map(n => {
+    const t = noteText(n);
+    const target = n.expense_id && S.expenses[n.expense_id] ? `data-act="open-exp" data-id="${esc(n.expense_id)}"` : n.group_id && S.groups[n.group_id] ? `data-act="open-group" data-id="${esc(n.group_id)}"` : '';
+    const [open, close] = target ? [`<button class="row arow${n.read_at ? '' : ' unread'}" ${target}>`, '</button>'] : [`<div class="row static arow${n.read_at ? '' : ' unread'}">`, '</div>'];
+    return `${open}<span class="ico" style="--c:var(--accent)">${icon(noteIcon(n))}</span>
+      <span class="main"><span class="wrap-text"><b>${esc(t.title)}</b></span>${t.body ? `<span class="wrap-text muted small">${esc(t.body)}</span>` : ''}<span class="sub">${esc(ago(n.created_at))}</span></span>${close}`;
+  }).join('');
+  return rows ? `<div class="list plain">${rows}</div>` : `<div class="empty"><h2>You’re all caught up</h2><p>When friends add expenses with you, comment, pay you or send a reminder, it shows up here.</p></div>`;
 }
 
-/* ---------- group and friend ledgers ---------- */
-function renderGroup(g){
-  const me = myId(g.id), t = typeOf(g.type);
-  const mine = myBalance(g.id);
-  const spent = {}; expOf(g.id).filter(e => e.kind !== 'payment').forEach(e => { const c = curOf(e, g); spent[c] = (spent[c] || 0) + Number(e.amount); });
-  const f = g.is_direct ? friendOf(g.id) : null;
-  const tabs = g.is_direct ? [['expenses', 'Expenses'], ['insights', 'Insights']] : [['expenses', 'Expenses'], ['balances', 'Balances'], ['insights', 'Insights'], ['board', 'Board']];
-  if (!tabs.some(([k]) => k === S.tab)) S.tab = 'expenses';
-  const header = g.is_direct
-    ? `<div class="friend-head">${avatar(personName(f), avatarUrl(f), 'av xl')}<div><h1>${esc(titleOf(g))}</h1>
-        <p class="muted" style="margin:0">${f?.user_id ? 'On Evenly' : f?.email ? `Invited · ${esc(f.email)}` : 'Not on Evenly yet'}</p></div></div>
-       ${f && !f.user_id ? `<div class="banner ok invite-nudge">${icon('user-plus', 18)}<span>${esc(personName(f))} won’t see these expenses or get notifications until they join. ${f.email ? 'They’ll be linked when they sign up with that email, or' : 'Add their email in settings, or'} send them an invite link.</span>
-         <span class="actions nowrap"><button class="btn sm primary" data-act="invite" data-id="${esc(g.id)}">${icon('share-2', 15)} Invite</button></span></div>` : ''}`
-    : `${g.cover_url ? `<div class="cover"><img src="${esc(g.cover_url)}" alt=""></div>` : ''}
-       <div class="group-title"><span class="av lg type-${t[0]}" aria-hidden="true">${icon(t[2], 20)}</span><h1>${esc(g.name)}</h1></div>
-       <div class="chips">${membersOf(g.id).map(m => `<span class="chip">${esc(m.id === me ? 'You' : personName(m))}${m.user_id || m.id === me ? '' : ' <span class="muted">· not joined</span>'}</span>`).join('')}</div>`;
-  let html = `<div class="ghead">
-    <div class="crumbs"><button class="btn ghost" data-act="home">${icon('chevron-left')} ${g.is_direct ? 'Friends' : 'Groups'}</button>
-      <span class="actions"><button class="btn sm" data-act="settle">${icon('wallet', 16)} Settle up</button>
-      <button class="btn sm" data-act="${g.is_direct ? 'edit-friend' : 'edit-group'}" aria-label="${g.is_direct ? 'Friend settings' : 'Group settings'}">${icon('settings', 16)}</button></span></div>
-    ${header}
-  </div>
-  <div class="stats">
-    <div class="stat"><div class="lbl">${g.is_direct ? 'Between you two' : 'Your balance'}</div><div class="val stack">${balanceLines(mine, {they: g.is_direct ? `${esc(titleOf(g))} owes you` : 'you get back'})}</div></div>
-    <div class="stat"><div class="lbl">${g.is_direct ? 'Spent together' : 'Group spending'}</div><div class="val">${fmtMulti(spent) || fmt(0, g.currency)}</div></div>
-  </div>`;
-  if (g.is_direct) {
-    const owed = Object.entries(mine).filter(([, v]) => v > 0);
-    if (owed.length && f && canRemind(g.id, f.id)) html += `<div class="actions">${owed.map(([c, v]) => `<button class="btn sm" data-act="remind" data-gid="${esc(g.id)}" data-member="${esc(f.id)}" data-amt="${v}" data-cur="${c}">${icon('bell', 14)} Remind ${esc(titleOf(g))} about ${fmt(v, c)}</button>`).join('')}</div>`;
-    html += acrossGroups(friendsIndex().get(friendKeyOf(g)));
-  }
-  html += `<div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button class="tab" role="tab" aria-selected="${S.tab === k}" data-act="tab" data-tab="${k}">${l}</button>`).join('')}</div>`;
-  if (S.tab === 'expenses') html += renderExpenses(g, me);
-  else if (S.tab === 'balances') html += renderBalances(g);
-  else if (S.tab === 'insights') html += renderInsights(g);
-  else html += renderBoard(g);
-  html += `<button class="btn primary fab" data-act="add-exp">${icon('plus', 20)} Add expense</button>`;
-  return html;
-}
+/* ---------- group and friend pages ---------- */
 function friendKeyOf(g){
   const f = friendOf(g.id); if (!f) return null;
   return f.user_id ? 'u:' + f.user_id : f.email ? 'e:' + f.email.toLowerCase() : 'd:' + g.id;
 }
-function acrossGroups(f){
-  if (!f || !f.groups.length) return '';
-  return `<div class="section"><h3>In your groups</h3><div class="list">${f.groups.map(x => `<button class="row" data-act="open-group" data-id="${esc(x.gid)}">
-      <span class="main"><span class="title">${esc(S.groups[x.gid].name)}</span></span><span class="amt">${balanceLines(x.amt)}</span></button>`).join('')}
-    <div class="row static"><span class="main"><b>Overall</b></span><span class="amt">${balanceLines(f.total)}</span></div></div></div>`;
+function banner(g, back, settingsAct){
+  const style = g?.cover_url ? ` style="background-image:url('${esc(g.cover_url)}')"` : '';
+  return `<div class="banner-head${g?.cover_url ? ' has-photo' : ` pattern-${g ? typeOf(g.type)[0] : 'other'}`}"${style}>
+    <button class="btn ghost icon-btn on-banner" data-act="home" aria-label="Back to ${back}">${icon('chevron-left', 24)}</button>
+    ${settingsAct ? `<button class="btn ghost icon-btn on-banner" data-act="${settingsAct}" aria-label="Settings">${icon('settings', 22)}</button>` : '<span></span>'}</div>`;
+}
+const chip = (act, label, {primary, on, attrs = ''} = {}) => `<button class="pchip${primary ? ' primary' : ''}${on ? ' on' : ''}" data-act="${act}" ${attrs}>${label}</button>`;
+
+function renderGroup(g){
+  const me = myId(g.id);
+  const f = g.is_direct ? friendOf(g.id) : null;
+  const valid = g.is_direct ? ['expenses', 'insights'] : ['expenses', 'balances', 'insights', 'board'];
+  if (!valid.includes(S.tab)) S.tab = 'expenses';
+  const mine = myBalance(g.id);
+  let lines;
+  if (g.is_direct) {
+    lines = [personLine(titleOf(g), mine)].filter(Boolean);
+    const fi = friendsIndex().get(friendKeyOf(g));
+    (fi?.groups || []).filter(x => Object.values(x.amt).some(v => v)).forEach(x => lines.push(personLine(titleOf(g), x.amt, ` <span class="muted">in ${esc(S.groups[x.gid].name)}</span>`)));
+  } else lines = groupLines(g, 4);
+  const hasExp = expOf(g.id).length > 0;
+  const summary = lines.length ? lines.join('') : `<span class="line muted">${hasExp ? 'You’re all settled up.' : 'No expenses yet.'}</span>`;
+  const owed = Object.entries(mine).filter(([, v]) => v > 0);
+  const chips = [chip('settle', 'Settle up', {primary: true})];
+  if (g.is_direct && owed.length && f && canRemind(g.id, f.id))
+    chips.push(...owed.map(([c, v]) => chip('remind', `${icon('bell', 14)} Remind`, {attrs: `data-gid="${esc(g.id)}" data-member="${esc(f.id)}" data-amt="${v}" data-cur="${c}"`})));
+  if (!g.is_direct) chips.push(chip('tab', 'Balances', {on: S.tab === 'balances', attrs: 'data-tab="balances"'}));
+  chips.push(chip('tab', 'Totals', {on: S.tab === 'insights', attrs: 'data-tab="insights"'}));
+  if (!g.is_direct) chips.push(chip('tab', 'Whiteboard', {on: S.tab === 'board', attrs: 'data-tab="board"'}));
+  if (!g.is_direct || (f && !f.user_id)) chips.push(chip('invite', `${icon('share-2', 14)} Invite`, {attrs: `data-id="${esc(g.id)}"`}));
+  const big = g.is_direct ? avatar(personName(f), avatarUrl(f), 'av hero') : groupAvatar(g, 'gav hero');
+  let html = `${banner(g.is_direct ? null : g, g.is_direct ? 'friends' : 'groups', g.is_direct ? 'edit-friend' : 'edit-group')}
+    <div class="page-head">${big}<h1>${esc(titleOf(g))}</h1>
+      ${g.is_direct && f && !f.user_id ? `<p class="muted small" style="margin:0">${f.email ? `Invited · ${esc(f.email)}` : 'Not on Evenly yet'}</p>` : ''}
+      <div class="lines big">${summary}</div></div>
+    <div class="chip-row">${chips.join('')}</div>`;
+  if (g.is_direct && f && !f.user_id) html += `<div class="banner ok invite-nudge">${icon('user-plus', 18)}<span>${esc(personName(f))} won’t see these expenses or get notifications until they join. Send them an invite link.</span>
+      <span class="actions nowrap"><button class="btn sm primary" data-act="invite" data-id="${esc(g.id)}">${icon('share-2', 15)} Invite</button></span></div>`;
+  if (S.tab !== 'expenses') html += `<button class="linkbtn small back-exp" data-act="tab" data-tab="expenses">${icon('chevron-left', 14)} Back to expenses</button>`;
+  if (S.tab === 'expenses') html += renderExpenses(g, me);
+  else if (S.tab === 'balances') html += renderBalances(g);
+  else if (S.tab === 'insights') html += renderInsights(g);
+  else html += renderBoard(g);
+  return html + fab('add-exp');
 }
 // A person you only share groups with: no one-to-one ledger yet.
 function renderFriendOnly(f){
-  return `<div class="ghead"><div class="crumbs"><button class="btn ghost" data-act="home">${icon('chevron-left')} Friends</button></div>
-    <div class="friend-head">${avatar(f.name, f.userId && S.profiles[f.userId]?.avatar_url, 'av xl')}<div><h1>${esc(f.name)}</h1><p class="muted" style="margin:0">${esc(friendSub(f))}</p></div></div></div>
-    <div class="stats"><div class="stat"><div class="lbl">Overall</div><div class="val stack">${balanceLines(f.total, {they: `${esc(f.name)} owes you`})}</div></div></div>
-    ${acrossGroups(f)}
+  const lines = f.groups.filter(x => Object.values(x.amt).some(v => v)).map(x => personLine(f.name, x.amt, ` <span class="muted">in ${esc(S.groups[x.gid].name)}</span>`));
+  return `${banner(null, 'friends', null)}
+    <div class="page-head">${avatar(f.name, f.userId && S.profiles[f.userId]?.avatar_url, 'av hero')}<h1>${esc(f.name)}</h1>
+      <div class="lines big">${lines.join('') || '<span class="line muted">You’re all settled up.</span>'}</div></div>
+    <div class="chip-row">${f.groups.map(x => chip('open-group', esc(S.groups[x.gid].name), {attrs: `data-id="${esc(x.gid)}"`})).join('')}</div>
     <div class="empty"><h2>Nothing just between you two</h2><p>Add an expense with ${esc(f.name)} that isn’t part of a group, like a coffee or a cab.</p>
       <button class="btn primary" data-act="friend-exp" data-key="${esc(f.key)}">Add an expense with ${esc(f.name)}</button></div>`;
 }
@@ -254,17 +332,17 @@ function myPart(g, e, me){
   }
   if (net > 0) return `<span class="pos">you lent</span><b class="pos">${fmt(net, cur)}</b>`;
   if (net < 0) return `<span class="neg">you borrowed</span><b class="neg">${fmt(net, cur)}</b>`;
-  return `<span>not involved</span><b class="muted">${fmt(0, cur)}</b>`;
+  return `<span class="muted">not involved</span>`;
 }
 export function expenseRow(g, e, me){
   const d = new Date(e.date + 'T00:00');
-  const dt = `<span class="date">${esc(d.toLocaleDateString(undefined, {month: 'short'}))}<b>${d.getDate()}</b></span>`;
-  const title = e.kind === 'payment' ? `${esc(nameOf(g.id, e.paid_by))} paid ${esc(nameOf(g.id, Object.keys(e.split)[0]))}` : esc(e.description);
+  const dt = `<span class="date">${esc(d.toLocaleDateString(undefined, {month: 'short'}))}<b>${String(d.getDate()).padStart(2, '0')}</b></span>`;
+  const title = e.kind === 'payment' ? `${esc(nameOf(g.id, e.paid_by))} paid ${esc(nm(g.id, Object.keys(e.split)[0]))}` : esc(e.description);
   const sub = e.kind === 'payment' ? 'Payment' : paidLabel(g, e);
   const badges = (e.repeat !== 'never' && e.repeat ? `<span class="badge">${icon('repeat', 12)} ${e.repeat}</span>` : '')
-    + (e.notes ? `<span class="badge">${icon('notebook-pen', 12)}</span>` : '')
-    + (e.bill ? `<span class="badge">${icon('users', 12)} shared bill</span>` : '');
-  return `<button class="row" data-act="open-exp" data-id="${esc(e.id)}">${dt}${e.kind === 'payment' ? payIcon() : catIcon(e.category)}
+    + (e.receipt_path ? `<span class="badge">${icon('paperclip', 12)}</span>` : '')
+    + (e.notes ? `<span class="badge">${icon('notebook-pen', 12)}</span>` : '');
+  return `<button class="row erow" data-act="open-exp" data-id="${esc(e.id)}">${dt}${e.kind === 'payment' ? payIcon() : catIcon(e.category)}
     <span class="main"><span class="title">${title}</span><span class="sub">${sub} ${badges}</span></span>
     <span class="amt">${myPart(g, e, me)}</span></button>`;
 }
@@ -273,14 +351,14 @@ function renderExpenses(g, me){
   const deleted = S.activity.filter(a => a.group_id === g.id && a.kind === 'expense_deleted' && !S.expenses[a.expense_id]).length;
   const trash = deleted ? `<button class="linkbtn small" data-act="deleted">${icon('rotate-ccw', 14)} Recently deleted (${deleted})</button>` : '';
   if (!exps.length) return `<div class="empty"><h2>No expenses yet</h2><p>Add the first bill: who paid, how much, and who it was for.${g.is_direct ? '' : ' Everyone in the group sees it straight away.'}</p>
-    <button class="btn primary" data-act="add-exp">Add an expense</button>${trash}</div>`;
+    <button class="btn primary" data-act="add-exp">${icon('receipt', 16)} Add an expense</button>${trash}</div>`;
   let lastMonth = '', out = '';
   for (const e of exps) {
     const month = new Date(e.date + 'T00:00').toLocaleDateString(undefined, {month: 'long', year: 'numeric'});
     if (month !== lastMonth) { out += `<div class="month">${esc(month)}</div>`; lastMonth = month; }
     out += expenseRow(g, e, me);
   }
-  return `<div class="list">${out}</div>${trash ? `<div>${trash}</div>` : ''}`;
+  return `<div class="list plain ledger">${out}</div>${trash ? `<div class="pad">${trash}</div>` : ''}`;
 }
 function renderBalances(g){
   const all = groupBalances(g.id), me = myId(g.id);
@@ -290,33 +368,35 @@ function renderBalances(g){
   let html = '';
   for (const cur of curs) {
     const bal = all[cur];
-    const max = Math.max(1, ...Object.values(bal).map(Math.abs));
-    const rows = membersOf(g.id).map(m => {
-      const b = bal[m.id] || 0, w = (Math.abs(b) / max * 100).toFixed(1);
-      const txt = b > 0 ? `<b class="pos">gets back ${fmt(b, cur)}</b>` : b < 0 ? `<b class="neg">owes ${fmt(b, cur)}</b>` : `<span class="muted">settled up</span>`;
-      return `<div class="bal-row">${avatar(personName(m), avatarUrl(m))}
-        <div style="min-width:0"><div style="font-weight:600;overflow-wrap:anywhere">${esc(m.id === me ? 'You' : personName(m))}</div>
-        <div class="diverge" aria-hidden="true"><span class="l">${b < 0 ? `<i style="width:${w}%"></i>` : ''}</span><span class="r">${b > 0 ? `<i style="width:${w}%"></i>` : ''}</span></div></div>
-        <div class="num" style="text-align:right">${txt}</div></div>`;
-    }).join('');
     const tx = g.simplify ? simplify(bal) : (pw[cur] || []);
-    const txRows = tx.map(t => `<div class="row static">
-        <span class="main"><span class="title">${esc(nameOf(g.id, t.from))} ${t.from === me ? 'pay' : 'pays'} ${esc(nameOf(g.id, t.to))}</span>
-        <span class="sub num">${fmt(t.amount, cur)}</span></span>
-        <span class="actions nowrap">${t.to === me && canRemind(g.id, t.from) ? `<button class="btn sm ghost" data-act="remind" data-gid="${esc(g.id)}" data-member="${esc(t.from)}" data-amt="${t.amount}" data-cur="${cur}">${icon('bell', 14)} Remind</button>` : ''}
-        <button class="btn sm" data-act="record" data-from="${esc(t.from)}" data-to="${esc(t.to)}" data-amt="${t.amount}" data-cur="${cur}">Record</button></span></div>`).join('');
-    html += `<div class="section"><h3>${curs.length > 1 ? `${cur} · ` : ''}Who’s up and who’s down</h3><div class="list">${rows}</div></div>
-      <div class="section"><h3>${g.simplify ? 'Fewest payments to settle' : 'Who owes whom'}</h3><div class="list">${txRows}</div></div>`;
+    const rows = membersOf(g.id).map(m => {
+      const b = bal[m.id] || 0;
+      const who = m.id === me ? 'You' : personName(m);
+      const head = b > 0 ? `${esc(who)} ${m.id === me ? 'get back' : 'gets back'} <b class="pos">${fmt(b, cur)}</b> in total`
+                 : b < 0 ? `${esc(who)} ${m.id === me ? 'owe' : 'owes'} <b class="neg">${fmt(b, cur)}</b> in total` : `${esc(who)} ${m.id === me ? 'are' : 'is'} settled up`;
+      const mine = tx.filter(t => t.from === m.id || t.to === m.id).map(t => {
+        const text = `${esc(nameOf(g.id, t.from))} ${t.from === me ? 'owe' : 'owes'} ${esc(nm(g.id, t.to))} <b class="${t.from === m.id ? 'neg' : 'pos'}">${fmt(t.amount, cur)}</b>`;
+        const acts = t.from === m.id ? `<span class="actions nowrap">${t.to === me && canRemind(g.id, t.from) ? `<button class="btn sm ghost" data-act="remind" data-gid="${esc(g.id)}" data-member="${esc(t.from)}" data-amt="${t.amount}" data-cur="${cur}">${icon('bell', 14)} Remind</button>` : ''}
+          <button class="btn sm" data-act="record" data-from="${esc(t.from)}" data-to="${esc(t.to)}" data-amt="${t.amount}" data-cur="${cur}">Settle up</button></span>` : '';
+        return `<div class="tree-line"><span class="wrap-text small">${text}</span>${acts}</div>`;
+      }).join('');
+      return `<div class="bal-card">${avatar(personName(m), avatarUrl(m), 'av md')}<div class="bal-main"><div class="wrap-text">${head}</div>
+        ${mine ? `<div class="tree">${mine}</div>` : ''}</div></div>`;
+    }).join('');
+    html += `<div class="section"><h3>${curs.length > 1 ? `${cur} · ` : ''}Balances</h3><div class="list plain">${rows}</div></div>`;
   }
-  return html + `<div class="actions"><button class="btn sm" data-act="copy">${icon('copy', 15)} Copy for group chat</button>
-    <span class="muted small">${g.simplify ? 'Debts are simplified. Turn this off in group settings.' : 'Debts are not simplified. Turn this on in group settings.'}</span></div>`;
+  return html + `<div class="actions pad"><button class="btn sm" data-act="copy">${icon('copy', 15)} Copy for group chat</button>
+    <span class="muted small">${g.simplify ? 'Debts are simplified. Change this in group settings.' : 'Debts are not simplified. Change this in group settings.'}</span></div>`;
 }
 function renderInsights(g){
   const real = expOf(g.id).filter(e => e.kind !== 'payment');
-  if (!real.length) return `<div class="empty"><h2>Nothing to chart yet</h2><p>Spending by category and by person shows up here once you add expenses.</p></div>`;
+  if (!real.length) return `<div class="empty"><h2>Nothing to total yet</h2><p>Spending by category and by person shows up here once you add expenses.</p></div>`;
+  const me = myId(g.id);
   const byCur = {}; real.forEach(e => (byCur[curOf(e, g)] ||= []).push(e));
   return Object.entries(byCur).map(([cur, list]) => {
     const total = list.reduce((a, e) => a + Number(e.amount), 0);
+    const myShare = list.reduce((a, e) => a + Number(e.split?.[me] || 0), 0);
+    const myPaid = list.reduce((a, e) => a + Number(payersOf(e)[me] || 0), 0);
     const byParent = {};
     list.forEach(e => { const c = catOf(e.category); (byParent[c.parent] ||= {label: c.parentLabel, color: c.color, icon: CATEGORY_GROUPS.find(x => x.key === c.parent).items[0][2], v: 0}).v += Number(e.amount); });
     const cats = Object.values(byParent).sort((a, b) => b.v - a.v), cmax = cats[0].v;
@@ -328,23 +408,27 @@ function renderInsights(g){
     const pRows = membersOf(g.id).map(m => `<div class="row static">${avatar(personName(m), avatarUrl(m))}
       <span class="main"><span class="title">${esc(nameOf(g.id, m.id))}</span>
       <span class="sub num">paid ${fmt(paid[m.id] || 0, cur)} · share ${fmt(share[m.id] || 0, cur)}</span></span></div>`).join('');
-    return `<div class="section"><h3>${Object.keys(byCur).length > 1 ? `${cur} · ` : ''}Spending by category · ${fmt(total, cur)}</h3><div class="list">${catRows}</div></div>
+    return `<div class="totals-grid">
+        <div class="stat"><div class="lbl">Total ${g.is_direct ? 'spent together' : 'group spending'}</div><div class="val">${fmt(total, cur)}</div></div>
+        ${me ? `<div class="stat"><div class="lbl">Total you paid for</div><div class="val">${fmt(myPaid, cur)}</div></div>
+        <div class="stat"><div class="lbl">Your total share</div><div class="val">${fmt(myShare, cur)}</div></div>` : ''}</div>
+      <div class="section"><h3>Spending by category</h3><div class="list">${catRows}</div></div>
       <div class="section"><h3>Paid versus share</h3><div class="list">${pRows}</div></div>`;
   }).join('');
 }
 function renderBoard(g){
   const by = g.whiteboard_by ? (g.whiteboard_by === uid() ? 'you' : (membersOf(g.id).find(m => m.user_id === g.whiteboard_by)?.name || 'someone')) : null;
-  return `<form class="section" id="boardForm"><h3>Group whiteboard</h3>
+  return `<form class="section pad" id="boardForm"><h3>Group whiteboard</h3>
     <p class="muted small" style="margin:0">Shared notes for everyone in the group: Wi-Fi password, trip plan, house rules.</p>
     <textarea id="boardText" rows="10" maxlength="5000" placeholder="Write anything the group should know…">${esc(g.whiteboard || '')}</textarea>
     <div class="actions"><span class="muted small">${by ? `Last edited by ${esc(by)}, ${esc(ago(g.whiteboard_at))}` : 'Nobody has written here yet.'}</span><span class="sp"></span>
     <button class="btn primary sm" type="submit">Save</button></div></form>`;
 }
 
-/* ---------- settings ---------- */
+/* ---------- Account tab ---------- */
 function renderSettings(){
   const p = myProfile() || {}, email = S.session.user.email;
-  return `<div class="ghead"><div class="crumbs"><button class="btn ghost" data-act="home">${icon('chevron-left')} Back</button></div><h1>Your account</h1></div>
+  return appBar('', '') + `<h1 class="page-title">Account</h1>
   <section class="card-sec">
     <div class="profile-row">
       <label class="avatar-edit" title="Change photo">${avatar(myName(), p.avatar_url, 'av xxl')}<span class="cam">${icon('camera', 16)}</span>
@@ -354,13 +438,6 @@ function renderSettings(){
     </div>
     <form id="nameForm" class="inline-form"><label class="f">Your name<input id="sName" maxlength="40" value="${esc(myName())}"></label><button class="btn" type="submit">Save</button></form>
     <label class="f">Default currency for new groups and friends<select id="sCur">${currencyOptions(p.default_currency || 'INR')}</select></label>
-  </section>
-  <section class="card-sec"><h3>${icon('mail', 15)} Email</h3>
-    <form id="emailForm" class="inline-form"><label class="f">New email<input id="sEmail" type="email" placeholder="${esc(email)}"></label><button class="btn" type="submit">Change</button></form>
-    <p class="hint muted small">We’ll send a confirmation link to the new address. Groups that invited your old email keep working.</p>
-  </section>
-  <section class="card-sec"><h3>${icon('key-round', 15)} Password</h3>
-    <form id="passForm" class="inline-form"><label class="f">New password<input id="sPass" type="password" autocomplete="new-password" placeholder="At least 6 characters"></label><button class="btn" type="submit">Change</button></form>
   </section>
   <section class="card-sec"><h3>${icon('bell', 15)} Notifications</h3>
     <div class="spread wrapflex"><span><b>Phone notifications</b><br><span class="muted small">${pushHelp()}</span></span>${pushButton()}</div>
@@ -374,6 +451,13 @@ function renderSettings(){
       <label class="f">Venmo username<input id="sVenmo" placeholder="jugal-patel" value="${esc(p.venmo || '')}" autocomplete="off"></label></div>
       <div class="actions"><span class="sp"></span><button class="btn" type="submit">Save</button></div>
     </form>
+  </section>
+  <section class="card-sec"><h3>${icon('mail', 15)} Email</h3>
+    <form id="emailForm" class="inline-form"><label class="f">New email<input id="sEmail" type="email" placeholder="${esc(email)}"></label><button class="btn" type="submit">Change</button></form>
+    <p class="hint muted small">We’ll send a confirmation link to the new address. Groups that invited your old email keep working.</p>
+  </section>
+  <section class="card-sec"><h3>${icon('key-round', 15)} Password</h3>
+    <form id="passForm" class="inline-form"><label class="f">New password<input id="sPass" type="password" autocomplete="new-password" placeholder="At least 6 characters"></label><button class="btn" type="submit">Change</button></form>
   </section>
   <section class="card-sec"><h3>${icon('share-2', 15)} Invite friends to Evenly</h3>
     <div class="actions"><code class="grow">${esc(location.origin)}</code><button class="btn sm" data-act="copy-app">${icon('copy', 15)} Copy link</button></div>
@@ -412,18 +496,4 @@ function pushBanner(){
     return `<div class="banner ok push-banner">${icon('smartphone', 18)}<span>To get notifications on iPhone, tap <b>Share</b> then <b>Add to Home Screen</b>, and open Evenly from your Home Screen.</span>
       <span class="actions nowrap"><button class="btn sm ghost" data-act="push-later">OK</button></span></div>`;
   return '';
-}
-function renderNotifications(){
-  const list = S.notifications;
-  const rows = list.map(n => {
-    const t = noteText(n);
-    const target = n.expense_id && S.expenses[n.expense_id] ? `data-act="open-exp" data-id="${esc(n.expense_id)}"` : n.group_id && S.groups[n.group_id] ? `data-act="open-group" data-id="${esc(n.group_id)}"` : '';
-    const [open, close] = target ? [`<button class="row${n.read_at ? '' : ' unread'}" ${target}>`, '</button>'] : [`<div class="row static${n.read_at ? '' : ' unread'}">`, '</div>'];
-    return `${open}<span class="ico" style="--c:var(--accent)">${icon(noteIcon(n))}</span>
-      <span class="main"><span class="wrap-text"><b>${esc(t.title)}</b></span>${t.body ? `<span class="wrap-text muted small">${esc(t.body)}</span>` : ''}<span class="sub">${esc(ago(n.created_at))}</span></span>${close}`;
-  }).join('');
-  return `<div class="ghead"><div class="crumbs"><button class="btn ghost" data-act="home">${icon('chevron-left')} Back</button>
-      <button class="btn sm ghost" data-act="settings">${icon('settings', 15)} Settings</button></div><h1>Notifications</h1></div>
-    ${pushBanner()}
-    ${rows ? `<div class="list">${rows}</div>` : `<div class="empty"><h2>You’re all caught up</h2><p>When friends add expenses with you, comment, pay you or send a reminder, it shows up here.</p></div>`}`;
 }
