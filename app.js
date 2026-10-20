@@ -26,8 +26,18 @@ const S = {
 
 /* ---------- backend ---------- */
 const cfg = window.EVENLY_CONFIG || {};
-const configured = cfg.SUPABASE_URL && !/YOUR-PROJECT/.test(cfg.SUPABASE_URL) && cfg.SUPABASE_ANON_KEY && !/YOUR-ANON/.test(cfg.SUPABASE_ANON_KEY);
-const sb = configured && window.supabase ? window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY) : null;
+// Accept common copy-paste variants: a trailing slash, /rest/v1/, or the dashboard address.
+function projectUrl(raw){
+  try {
+    const u = new URL(String(raw || '').trim());
+    const dash = u.pathname.match(/\/project\/([a-z0-9]{10,})/i);
+    if (/(^|\.)supabase\.com$/i.test(u.hostname) && dash) return `https://${dash[1]}.supabase.co`;
+    return u.origin;
+  } catch { return ''; }
+}
+const SB_URL = projectUrl(cfg.SUPABASE_URL), SB_KEY = String(cfg.SUPABASE_ANON_KEY || '').trim();
+const configured = SB_URL && !/YOUR-PROJECT/i.test(SB_URL) && SB_KEY && !/YOUR-ANON/.test(SB_KEY);
+const sb = configured && window.supabase ? window.supabase.createClient(SB_URL, SB_KEY) : null;
 let channel = null, reloadT = null, booted = null;
 
 const uid = () => S.session?.user?.id;
