@@ -4,14 +4,25 @@ A free Splitwise-style app. Friends make accounts and add shared expenses to
 groups. Evenly keeps a live tally of who owes whom and works out the fewest
 payments to settle up.
 
-- Sign up, sign in and reset a password by email
-- One-to-one with a friend, no group needed (like Splitwise's Friends tab)
-- Groups with friends: invite people by email so they see the group when they sign in, or add someone by name only
-- Split equally, by exact amounts, by percentages or by shares
-- Balances, fewest-payment settle-up and a recorded payment history
-- Spending by category, and what each person paid versus their share
-- Live updates: when a friend adds an expense, it appears for everyone
-- Works on phones: open it in your browser and use **Add to Home Screen**
+**Splitting**
+- Friends (one-to-one, no group needed) and groups (trip, home, couple, other)
+- Split equally, by exact amounts, percentages, shares, or equally with +/− adjustments
+- Several people paying for one expense
+- One bill with several friends, outside any group
+- Any currency, per expense; balances are kept per currency
+- Recurring expenses: weekly, every 2 weeks, monthly, yearly
+- About 45 categories with icons, guessed from the description
+- Simplified debts (fewest payments), switchable per group
+- Each friend's balance across every group you share
+
+**Together**
+- Notes and comments on expenses
+- Full change history, and restoring deleted expenses
+- Activity feed across all friends and groups
+- Invite links and QR codes to join a group or a friend ledger
+- Group cover photos and a shared whiteboard
+- Profile photo, name, default currency, email, password, delete account
+- Live updates on every device; installable on phones
 
 Everything runs on free tiers: **Supabase** for accounts and the database,
 plus any static host for the website.
@@ -77,11 +88,19 @@ and your data stays.
   under **Authentication > Sign In / Providers > Email**. Leave it on for
   real use: invites only link to confirmed emails.
 
+## Tests
+Run `npm test` (Node 20+) to check the split and balance maths.
+
 ## Files
 | File | What it is |
 |---|---|
 | `index.html` | The page |
-| `app.js` | All app logic: sign-in, groups, splits, balances |
+| `js/main.js` | Startup, sign-in, button handling |
+| `js/views.js`, `js/sheets.js` | Screens and forms |
+| `js/state.js` | Data loading and derived balances |
+| `js/money.js` | Split and balance maths (tested in `tests/`) |
+| `js/categories.js`, `js/icons.js` | Categories and icons |
+| `vendor/` | QR-code library |
 | `styles.css` | Look and feel (light and dark mode) |
 | `config.js` | Your Supabase URL and key |
 | `netlify.toml` | Netlify settings (no build step) |

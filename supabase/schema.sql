@@ -86,8 +86,10 @@ begin
 end $$;
 
 -- Starts (or reopens) a one-to-one ledger with a friend.
--- If you already have one with this email, that one is returned instead of a duplicate.
-create or replace function public.add_friend(p_my_name text, p_name text, p_email text, p_currency text)
+-- If you already have one with this person, that one is returned instead of a duplicate.
+-- p_friend_user: optional account id of someone you already share a group with.
+drop function if exists public.add_friend(text, text, text, text);
+create or replace function public.add_friend(p_my_name text, p_name text, p_email text, p_currency text, p_friend_user uuid default null)
 returns uuid language plpgsql security definer set search_path = public as $$
 declare
   gid uuid;
@@ -95,9 +97,16 @@ declare
   em text := nullif(lower(trim(p_email)), '');
 begin
   if auth.uid() is null then raise exception 'Sign in first'; end if;
+  if p_friend_user is not null then
+    if p_friend_user = auth.uid() or not public.shares_group(p_friend_user) then raise exception 'You can only add people you share a group with'; end if;
+    fid := p_friend_user;
+    select lower(u.email) into em from auth.users u where u.id = fid;
+  end if;
   if em is not null and em = lower(auth.email()) then raise exception 'That is your own email. Enter your friend''s email.'; end if;
-  if em is not null then
+  if em is not null and fid is null then
     select u.id into fid from auth.users u where lower(u.email) = em and u.email_confirmed_at is not null limit 1;
+  end if;
+  if em is not null or fid is not null then
     select g.id into gid
       from public.groups g
       join public.group_members me on me.group_id = g.id and me.user_id = auth.uid()
@@ -153,12 +162,12 @@ end $$;
 revoke all on function public.is_member(uuid) from public, anon;
 revoke all on function public.create_group(text, text, text, jsonb) from public, anon;
 revoke all on function public.add_member(uuid, text, text) from public, anon;
-revoke all on function public.add_friend(text, text, text, text) from public, anon;
+revoke all on function public.add_friend(text, text, text, text, uuid) from public, anon;
 revoke all on function public.claim_invites() from public, anon;
 grant execute on function public.is_member(uuid) to authenticated;
 grant execute on function public.create_group(text, text, text, jsonb) to authenticated;
 grant execute on function public.add_member(uuid, text, text) to authenticated;
-grant execute on function public.add_friend(text, text, text, text) to authenticated;
+grant execute on function public.add_friend(text, text, text, text, uuid) to authenticated;
 grant execute on function public.claim_invites() to authenticated;
 
 -- ---------- row level security: you only ever see groups you belong to ----------
@@ -192,11 +201,412 @@ drop policy if exists "members manage expenses" on public.expenses;
 create policy "members manage expenses" on public.expenses for all
   using (public.is_member(group_id)) with check (public.is_member(group_id));
 
+
+-- =====================================================================
+-- Phase 1 & 2: Splitwise features. Add-only: earlier app versions keep working.
+-- =====================================================================
+
+-- ---------- groups ----------
+alter table public.groups add column if not exists type text not null default 'other';
+alter table public.groups add column if not exists cover_url text;
+alter table public.groups add column if not exists whiteboard text not null default '';
+alter table public.groups add column if not exists whiteboard_by uuid;
+alter table public.groups add column if not exists whiteboard_at timestamptz;
+alter table public.groups add column if not exists simplify boolean not null default true;
+alter table public.groups add column if not exists invite_code text;
+update public.groups set invite_code = substr(replace(gen_random_uuid()::text, '-', ''), 1, 16) where invite_code is null;
+alter table public.groups alter column invite_code set default substr(replace(gen_random_uuid()::text, '-', ''), 1, 16);
+alter table public.groups alter column invite_code set not null;
+create unique index if not exists groups_invite_code_idx on public.groups (invite_code);
+alter table public.groups drop constraint if exists groups_type_check;
+alter table public.groups add constraint groups_type_check check (type in ('home', 'trip', 'couple', 'other'));
+alter table public.groups drop constraint if exists groups_whiteboard_check;
+alter table public.groups add constraint groups_whiteboard_check check (char_length(whiteboard) <= 5000);
+-- Deleting your account must not delete groups your friends still use.
+alter table public.groups alter column created_by drop not null;
+alter table public.groups drop constraint if exists groups_created_by_fkey;
+alter table public.groups add constraint groups_created_by_fkey foreign key (created_by) references auth.users(id) on delete set null;
+grant update (name, currency, type, cover_url, whiteboard, simplify) on public.groups to authenticated;
+
+create or replace function public.stamp_whiteboard()
+returns trigger language plpgsql as $$
+begin
+  if new.whiteboard is distinct from old.whiteboard then
+    new.whiteboard_by := auth.uid();
+    new.whiteboard_at := now();
+  end if;
+  return new;
+end $$;
+drop trigger if exists groups_whiteboard on public.groups;
+create trigger groups_whiteboard before update on public.groups for each row execute function public.stamp_whiteboard();
+
+-- ---------- expenses ----------
+-- payers: {"<member id>": amount} when several people paid; null means paid_by paid it all.
+-- currency: null means the group's currency (rows from older app versions).
+-- bill: for one bill split across several friends, {"total": 90000, "with": ["Rahul", "Priya"]}.
+alter table public.expenses add column if not exists payers jsonb;
+alter table public.expenses add column if not exists currency text;
+alter table public.expenses add column if not exists notes text not null default '';
+alter table public.expenses add column if not exists repeat text not null default 'never';
+alter table public.expenses add column if not exists repeat_n integer not null default 0;
+alter table public.expenses add column if not exists next_date date;
+alter table public.expenses add column if not exists repeat_parent uuid references public.expenses(id) on delete set null;
+alter table public.expenses add column if not exists bill jsonb;
+alter table public.expenses drop constraint if exists expenses_split_mode_check;
+alter table public.expenses add constraint expenses_split_mode_check check (split_mode in ('equal', 'exact', 'percent', 'shares', 'adjust'));
+alter table public.expenses drop constraint if exists expenses_repeat_check;
+alter table public.expenses add constraint expenses_repeat_check check (repeat in ('never', 'weekly', 'biweekly', 'monthly', 'yearly'));
+alter table public.expenses drop constraint if exists expenses_payers_check;
+alter table public.expenses add constraint expenses_payers_check check (payers is null or jsonb_typeof(payers) = 'object');
+alter table public.expenses drop constraint if exists expenses_currency_check;
+alter table public.expenses add constraint expenses_currency_check check (currency is null or char_length(currency) = 3);
+alter table public.expenses drop constraint if exists expenses_notes_check;
+alter table public.expenses add constraint expenses_notes_check check (char_length(notes) <= 1000);
+create unique index if not exists expenses_recurring_idx on public.expenses (repeat_parent, date) where repeat_parent is not null;
+create index if not exists expenses_due_idx on public.expenses (next_date) where repeat <> 'never';
+
+-- The date of the k-th repeat after d.
+create or replace function public.occurrence(d date, r text, k integer)
+returns date language sql immutable as $$
+  select case r
+    when 'weekly'   then d + 7 * k
+    when 'biweekly' then d + 14 * k
+    when 'monthly'  then (d + make_interval(months => k))::date
+    when 'yearly'   then (d + make_interval(years => k))::date
+  end
+$$;
+
+-- Keeps next_date in step when an expense starts repeating or its date changes.
+-- Only future repeats are created: nothing is back-filled.
+create or replace function public.prep_recurring()
+returns trigger language plpgsql as $$
+declare k integer := 1;
+begin
+  if new.repeat = 'never' then
+    new.next_date := null; new.repeat_n := 0;
+    return new;
+  end if;
+  if tg_op = 'UPDATE' and new.repeat = old.repeat and new.date = old.date and old.next_date is not null then
+    return new;
+  end if;
+  while public.occurrence(new.date, new.repeat, k) <= current_date and k < 5000 loop k := k + 1; end loop;
+  new.repeat_n := k - 1;
+  new.next_date := public.occurrence(new.date, new.repeat, k);
+  return new;
+end $$;
+drop trigger if exists expenses_recurring on public.expenses;
+create trigger expenses_recurring before insert or update on public.expenses for each row execute function public.prep_recurring();
+
+-- ---------- profiles ----------
+create table if not exists public.profiles (
+  id                uuid primary key references auth.users(id) on delete cascade,
+  name              text not null default '' check (char_length(name) <= 40),
+  avatar_url        text,
+  default_currency  text not null default 'INR' check (char_length(default_currency) = 3),
+  updated_at        timestamptz not null default now()
+);
+
+create or replace function public.shares_group(p_user uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from public.group_members a
+    join public.group_members b on b.group_id = a.group_id
+    where a.user_id = auth.uid() and b.user_id = p_user);
+$$;
+
+alter table public.profiles enable row level security;
+drop policy if exists "read own and co-member profiles" on public.profiles;
+drop policy if exists "create own profile" on public.profiles;
+drop policy if exists "edit own profile" on public.profiles;
+create policy "read own and co-member profiles" on public.profiles for select using (id = auth.uid() or public.shares_group(id));
+create policy "create own profile" on public.profiles for insert with check (id = auth.uid());
+create policy "edit own profile" on public.profiles for update using (id = auth.uid()) with check (id = auth.uid());
+
+-- ---------- comments ----------
+create table if not exists public.comments (
+  id          uuid primary key default gen_random_uuid(),
+  expense_id  uuid not null references public.expenses(id) on delete cascade,
+  group_id    uuid not null references public.groups(id) on delete cascade,
+  user_id     uuid default auth.uid() references auth.users(id) on delete set null,
+  body        text not null check (char_length(body) between 1 and 1000),
+  created_at  timestamptz not null default now()
+);
+create index if not exists comments_expense_idx on public.comments (expense_id);
+alter table public.comments enable row level security;
+drop policy if exists "members read comments" on public.comments;
+drop policy if exists "members write comments" on public.comments;
+drop policy if exists "authors delete comments" on public.comments;
+create policy "members read comments" on public.comments for select using (public.is_member(group_id));
+create policy "members write comments" on public.comments for insert with check (
+  public.is_member(group_id) and user_id = auth.uid()
+  and exists (select 1 from public.expenses e where e.id = expense_id and e.group_id = comments.group_id));
+create policy "authors delete comments" on public.comments for delete using (user_id = auth.uid());
+revoke update on public.comments from anon, authenticated;
+
+-- ---------- activity: history of every change, for the feed and for restoring ----------
+create table if not exists public.activity (
+  id          bigint generated always as identity primary key,
+  group_id    uuid not null,
+  expense_id  uuid,
+  actor       uuid default auth.uid(),
+  kind        text not null,
+  data        jsonb not null default '{}'::jsonb,
+  created_at  timestamptz not null default now()
+);
+create index if not exists activity_group_idx on public.activity (group_id, created_at desc);
+create index if not exists activity_expense_idx on public.activity (expense_id);
+alter table public.activity enable row level security;
+drop policy if exists "members read activity" on public.activity;
+create policy "members read activity" on public.activity for select using (public.is_member(group_id));
+revoke insert, update, delete on public.activity from anon, authenticated;
+
+create or replace function public.log_expense()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare k text;
+begin
+  if current_setting('evenly.quiet', true) = '1' then return coalesce(new, old); end if;
+  if tg_op = 'INSERT' then
+    k := case when current_setting('evenly.restoring', true) = '1' then 'expense_restored'
+              when current_setting('evenly.recurring', true) = '1' then 'expense_recurring'
+              else 'expense_added' end;
+    insert into public.activity (group_id, expense_id, kind, data) values (new.group_id, new.id, k, jsonb_build_object('new', to_jsonb(new)));
+    return new;
+  elsif tg_op = 'UPDATE' then
+    -- Moving the next repeat date along is bookkeeping, not news.
+    if (to_jsonb(new) - 'next_date' - 'repeat_n') = (to_jsonb(old) - 'next_date' - 'repeat_n') then return new; end if;
+    insert into public.activity (group_id, expense_id, kind, data)
+      values (new.group_id, new.id, 'expense_updated', jsonb_build_object('old', to_jsonb(old), 'new', to_jsonb(new)));
+    return new;
+  else
+    -- A whole group being deleted: nobody can see its history any more.
+    if not exists (select 1 from public.groups where id = old.group_id) then return old; end if;
+    insert into public.activity (group_id, expense_id, kind, data) values (old.group_id, old.id, 'expense_deleted', jsonb_build_object('old', to_jsonb(old)));
+    return old;
+  end if;
+end $$;
+drop trigger if exists expenses_activity on public.expenses;
+create trigger expenses_activity after insert or update or delete on public.expenses for each row execute function public.log_expense();
+
+create or replace function public.log_comment()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.activity (group_id, expense_id, kind, data)
+    select new.group_id, new.expense_id, 'comment', jsonb_build_object('body', left(new.body, 200), 'description', e.description)
+      from public.expenses e where e.id = new.expense_id;
+  return new;
+end $$;
+drop trigger if exists comments_activity on public.comments;
+create trigger comments_activity after insert on public.comments for each row execute function public.log_comment();
+
+create or replace function public.log_group()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.activity (group_id, kind, data)
+    values (new.id, case when new.is_direct then 'friend_added' else 'group_created' end, jsonb_build_object('name', new.name));
+  return new;
+end $$;
+drop trigger if exists groups_activity on public.groups;
+create trigger groups_activity after insert on public.groups for each row execute function public.log_group();
+
+create or replace function public.log_member()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'INSERT' then
+    if new.user_id is not null and new.user_id = (select created_by from public.groups where id = new.group_id) then return new; end if;
+    insert into public.activity (group_id, kind, data)
+      values (new.group_id, case when new.user_id is null then 'member_added' else 'member_joined' end, jsonb_build_object('name', new.name, 'member', new.id));
+  elsif old.user_id is null and new.user_id is not null then
+    insert into public.activity (group_id, actor, kind, data) values (new.group_id, new.user_id, 'member_joined', jsonb_build_object('name', new.name, 'member', new.id));
+  elsif old.user_id is not null and new.user_id is null then
+    insert into public.activity (group_id, actor, kind, data) values (new.group_id, old.user_id, 'member_left', jsonb_build_object('name', new.name, 'member', new.id));
+  end if;
+  return new;
+end $$;
+drop trigger if exists members_activity on public.group_members;
+create trigger members_activity after insert or update on public.group_members for each row execute function public.log_member();
+
+-- Expenses saved by older app versions have no currency of their own: give them the group's.
+do $$
+begin
+  perform set_config('evenly.quiet', '1', true);
+  update public.expenses e set currency = g.currency from public.groups g where g.id = e.group_id and e.currency is null;
+  perform set_config('evenly.quiet', '', true);
+end $$;
+
+-- ---------- functions the app calls ----------
+
+-- Creates any repeats that have come due in your groups. The app calls it when it opens.
+create or replace function public.process_recurring()
+returns integer language plpgsql security definer set search_path = public as $$
+declare
+  e record;
+  n integer := 0;
+  k integer;
+  d date;
+begin
+  if auth.uid() is null then return 0; end if;
+  for e in
+    select x.* from public.expenses x
+     where x.repeat <> 'never' and x.next_date <= current_date
+       and exists (select 1 from public.group_members m where m.group_id = x.group_id and m.user_id = auth.uid())
+     for update skip locked
+  loop
+    k := e.repeat_n + 1;
+    d := e.next_date;
+    perform set_config('evenly.recurring', '1', true);
+    while d <= current_date and k < 5000 loop
+      insert into public.expenses (group_id, kind, description, amount, paid_by, payers, split, split_mode, split_input,
+                                   category, date, currency, notes, repeat, repeat_parent, created_by)
+        values (e.group_id, e.kind, e.description, e.amount, e.paid_by, e.payers, e.split, e.split_mode, e.split_input,
+                e.category, d, e.currency, e.notes, 'never', e.id, e.created_by)
+        on conflict do nothing;
+      n := n + 1;
+      k := k + 1;
+      d := public.occurrence(e.date, e.repeat, k);
+    end loop;
+    perform set_config('evenly.recurring', '', true);
+    update public.expenses set repeat_n = k - 1, next_date = d where id = e.id;
+  end loop;
+  return n;
+end $$;
+
+-- Brings back a deleted expense from its history entry.
+create or replace function public.restore_expense(p_activity bigint)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare
+  a public.activity;
+  eid uuid;
+begin
+  select * into a from public.activity where id = p_activity and kind = 'expense_deleted';
+  if not found or not public.is_member(a.group_id) then raise exception 'There is nothing to restore here.'; end if;
+  eid := (a.data->'old'->>'id')::uuid;
+  if exists (select 1 from public.expenses where id = eid) then return eid; end if;
+  if not exists (select 1 from public.group_members where id = (a.data->'old'->>'paid_by')::uuid) then
+    raise exception 'Someone in this expense has been removed from the group, so it can''t be restored.';
+  end if;
+  perform set_config('evenly.restoring', '1', true);
+  insert into public.expenses select * from jsonb_populate_record(null::public.expenses, a.data->'old');
+  perform set_config('evenly.restoring', '', true);
+  return eid;
+end $$;
+
+-- Leave a group or friend ledger. Your past expenses stay, under your name.
+create or replace function public.leave_group(p_group uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  update public.group_members set user_id = null, email = null where group_id = p_group and user_id = auth.uid();
+end $$;
+
+-- What an invite link points to, so the join screen can show it before joining.
+create or replace function public.invite_info(p_code text)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare
+  g public.groups;
+begin
+  if auth.uid() is null then raise exception 'Sign in first'; end if;
+  select * into g from public.groups where invite_code = p_code;
+  if not found then return null; end if;
+  return jsonb_build_object(
+    'group_id', g.id, 'name', g.name, 'type', g.type, 'is_direct', g.is_direct, 'currency', g.currency,
+    'already_member', exists (select 1 from public.group_members where group_id = g.id and user_id = auth.uid()),
+    'inviter', (select name from public.group_members where group_id = g.id and user_id = g.created_by limit 1),
+    'members', (select coalesce(jsonb_agg(jsonb_build_object('id', id, 'name', name, 'joined', user_id is not null) order by created_at), '[]'::jsonb)
+                  from public.group_members where group_id = g.id));
+end $$;
+
+-- Join through an invite link, either as a new member or as one of the names already in the group.
+create or replace function public.join_group(p_code text, p_member uuid, p_my_name text)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare
+  g public.groups;
+begin
+  if auth.uid() is null then raise exception 'Sign in first'; end if;
+  select * into g from public.groups where invite_code = p_code;
+  if not found then raise exception 'This invite link isn''t valid any more. Ask for a new one.'; end if;
+  if exists (select 1 from public.group_members where group_id = g.id and user_id = auth.uid()) then return g.id; end if;
+  if p_member is not null then
+    update public.group_members set user_id = auth.uid(), email = lower(auth.email())
+     where id = p_member and group_id = g.id and user_id is null;
+    if not found then raise exception 'Someone has already joined as that person.'; end if;
+  elsif g.is_direct then
+    raise exception 'This invite has already been used.';
+  else
+    insert into public.group_members (group_id, user_id, name, email) values (g.id, auth.uid(), trim(p_my_name), lower(auth.email()));
+  end if;
+  return g.id;
+end $$;
+
+-- Makes old invite links stop working.
+create or replace function public.reset_invite(p_group uuid)
+returns text language plpgsql security definer set search_path = public as $$
+declare c text := substr(replace(gen_random_uuid()::text, '-', ''), 1, 16);
+begin
+  if not public.is_member(p_group) then raise exception 'Not a member of this group'; end if;
+  update public.groups set invite_code = c where id = p_group;
+  return c;
+end $$;
+
+-- Changes your name everywhere: your profile and every group you are in.
+create or replace function public.update_my_name(p_name text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null or char_length(trim(p_name)) not between 1 and 40 then raise exception 'Enter a name up to 40 characters.'; end if;
+  insert into public.profiles (id, name) values (auth.uid(), trim(p_name))
+    on conflict (id) do update set name = excluded.name, updated_at = now();
+  update public.group_members set name = trim(p_name) where user_id = auth.uid();
+end $$;
+
+-- Deletes your login. Groups and expenses stay for your friends, under your name.
+create or replace function public.delete_my_account()
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'Sign in first'; end if;
+  update public.group_members set user_id = null, email = null where user_id = auth.uid();
+  delete from auth.users where id = auth.uid();
+end $$;
+
+do $$
+declare f text;
+begin
+  foreach f in array array[
+    'public.shares_group(uuid)', 'public.process_recurring()', 'public.restore_expense(bigint)',
+    'public.leave_group(uuid)', 'public.invite_info(text)', 'public.join_group(text, uuid, text)',
+    'public.reset_invite(uuid)', 'public.update_my_name(text)', 'public.delete_my_account()'] loop
+    execute format('revoke all on function %s from public, anon', f);
+    execute format('grant execute on function %s to authenticated', f);
+  end loop;
+end $$;
+
+-- ---------- photo storage: profile photos and group covers ----------
+-- Files sit in public buckets under unguessable paths; only you (or group members) can change them.
+create or replace function public.is_member_text(p_group text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.group_members where group_id::text = p_group and user_id = auth.uid());
+$$;
+revoke all on function public.is_member_text(text) from public, anon;
+grant execute on function public.is_member_text(text) to authenticated;
+
+do $$
+begin
+  if to_regclass('storage.buckets') is null then return; end if;
+  insert into storage.buckets (id, name, public) values ('avatars', 'avatars', true) on conflict (id) do nothing;
+  insert into storage.buckets (id, name, public) values ('covers', 'covers', true) on conflict (id) do nothing;
+
+  execute 'drop policy if exists "evenly avatars" on storage.objects';
+  execute 'drop policy if exists "evenly covers" on storage.objects';
+  execute $p$create policy "evenly avatars" on storage.objects for all to authenticated
+    using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text)
+    with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text)$p$;
+  execute $p$create policy "evenly covers" on storage.objects for all to authenticated
+    using (bucket_id = 'covers' and public.is_member_text((storage.foldername(name))[1]))
+    with check (bucket_id = 'covers' and public.is_member_text((storage.foldername(name))[1]))$p$;
+end $$;
+
 -- ---------- live updates ----------
 do $$
 declare t text;
 begin
-  foreach t in array array['groups', 'group_members', 'expenses'] loop
+  foreach t in array array['groups', 'group_members', 'expenses', 'comments', 'activity', 'profiles'] loop
     if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
       execute format('alter publication supabase_realtime add table public.%I', t);
     end if;
