@@ -800,6 +800,105 @@ begin
     with check (bucket_id = 'receipts' and public.is_member_text((storage.foldername(name))[1]))$p$;
 end $$;
 
+-- =====================================================================
+-- Friends connect by email, like Splitwise.
+-- =====================================================================
+
+-- Anyone added with the email of an existing (confirmed) account is linked to it at once,
+-- whether the email is given when they're added or filled in later.
+create or replace function public.autolink_member()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare found_user uuid;
+begin
+  if new.user_id is null and new.email is not null and (tg_op = 'INSERT' or new.email is distinct from old.email) then
+    select u.id into found_user from auth.users u
+     where lower(u.email) = lower(new.email) and u.email_confirmed_at is not null
+       and not exists (select 1 from public.group_members x where x.group_id = new.group_id and x.user_id = u.id and x.id <> new.id)
+     limit 1;
+    new.user_id := found_user;
+  end if;
+  return new;
+end $$;
+drop trigger if exists members_autolink on public.group_members;
+create trigger members_autolink before insert or update on public.group_members for each row execute function public.autolink_member();
+
+-- Rewrites member ids used as keys, e.g. in an expense's split.
+create or replace function public.remap_keys(j jsonb, m jsonb)
+returns jsonb language sql immutable as $$
+  select case when j is null or jsonb_typeof(j) <> 'object' then j
+              else coalesce((select jsonb_object_agg(coalesce(m->>key, key), value) from jsonb_each(j)), '{}'::jsonb) end
+$$;
+
+-- Two people should have one friend ledger. If linking created a second one, fold it into the older.
+create or replace function public.merge_direct_ledgers(p_a uuid, p_b uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare
+  keep uuid;
+  dup uuid;
+  m jsonb;
+begin
+  select g.id into keep from public.groups g
+   where g.is_direct
+     and exists (select 1 from public.group_members x where x.group_id = g.id and x.user_id = p_a)
+     and exists (select 1 from public.group_members x where x.group_id = g.id and x.user_id = p_b)
+   order by g.created_at limit 1;
+  if keep is null then return; end if;
+  for dup in
+    select g.id from public.groups g
+     where g.is_direct and g.id <> keep
+       and exists (select 1 from public.group_members x where x.group_id = g.id and x.user_id = p_a)
+       and exists (select 1 from public.group_members x where x.group_id = g.id and x.user_id = p_b)
+  loop
+    select jsonb_object_agg(d.id::text, k.id::text) into m
+      from public.group_members d join public.group_members k on k.group_id = keep and k.user_id = d.user_id
+     where d.group_id = dup;
+    perform set_config('evenly.quiet', '1', true);
+    update public.expenses set
+        group_id = keep,
+        paid_by = coalesce((m->>paid_by::text)::uuid, paid_by),
+        payers = public.remap_keys(payers, m),
+        split = public.remap_keys(split, m),
+        split_input = public.remap_keys(split_input, m)
+      where group_id = dup;
+    update public.comments set group_id = keep where group_id = dup;
+    update public.activity set group_id = keep where group_id = dup;
+    update public.notifications set group_id = keep where group_id = dup;
+    delete from public.groups where id = dup;
+    perform set_config('evenly.quiet', '', true);
+  end loop;
+end $$;
+revoke all on function public.merge_direct_ledgers(uuid, uuid) from public, anon, authenticated;
+
+create or replace function public.merge_after_link()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare other uuid;
+begin
+  if new.user_id is not null and (tg_op = 'INSERT' or old.user_id is null)
+     and exists (select 1 from public.groups where id = new.group_id and is_direct) then
+    select user_id into other from public.group_members where group_id = new.group_id and id <> new.id and user_id is not null limit 1;
+    if other is not null then perform public.merge_direct_ledgers(new.user_id, other); end if;
+  end if;
+  return null;
+end $$;
+drop trigger if exists members_merge on public.group_members;
+-- No column list: user_id is often set by members_autolink, not by the UPDATE itself.
+create trigger members_merge after insert or update on public.group_members for each row execute function public.merge_after_link();
+
+-- Merge any duplicates that already exist.
+do $$
+declare r record;
+begin
+  for r in
+    select distinct least(a.user_id, b.user_id) as x, greatest(a.user_id, b.user_id) as y
+      from public.groups g
+      join public.group_members a on a.group_id = g.id and a.user_id is not null
+      join public.group_members b on b.group_id = g.id and b.user_id is not null and b.user_id <> a.user_id
+     where g.is_direct
+  loop
+    perform public.merge_direct_ledgers(r.x, r.y);
+  end loop;
+end $$;
+
 -- ---------- live updates ----------
 do $$
 declare t text;

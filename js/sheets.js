@@ -444,7 +444,7 @@ export function openGroupSheet(gid){
       <button type="button" class="btn" id="gInvite">${icon('qr-code', 16)} Invite link and QR code</button>` : ''}
     <div><div class="f-l">People</div><div class="split-rows" id="gMembers"></div></div>
     <div class="mem-add"><input id="gNewName" maxlength="40" placeholder="Name" aria-label="New person’s name"><input id="gNewEmail" type="email" placeholder="Email (optional)" aria-label="New person’s email"><button type="button" class="btn" id="gAdd">Add</button></div>
-    <p class="hint muted small">Add an email so that person can sign in and see this group. Or share the invite link.</p>
+    <p class="hint muted small">Add each person’s email so they see this group and get notified. Without one they’re only a name here, until they join with the invite link.</p>
     <p class="hint err" id="gHint"></p>
     <div class="actions">
       ${g ? `<button type="button" class="btn" id="gLeave" ${settled ? '' : 'disabled title="Settle up before leaving"'}>${icon('door-open', 15)} Leave</button>` : ''}
@@ -590,8 +590,8 @@ export function openFriendSheet(gid, then){
   const settled = g ? !Object.values(myBalance(g.id)).some(v => v) : true;
   openSheet(`<form class="sheet-in" id="fForm" novalidate>${head(g ? 'Friend settings' : 'Add a friend')}
     <label class="f">Friend’s name<input id="fName" maxlength="40" placeholder="Rahul Mehta" value="${esc(f?.name || '')}" ${f?.user_id ? 'disabled' : 'autofocus'}></label>
-    <label class="f">Their email (optional)<input id="fEmail" type="email" placeholder="rahul@example.com" value="${esc(f?.email || '')}" ${f?.user_id ? 'disabled' : ''}></label>
-    <p class="hint muted small">${f?.user_id ? 'They’re on Evenly and see everything you share.' : 'With their email, or with an invite link, they can sign in and see everything you share.'}</p>
+    <label class="f">Their email<input id="fEmail" type="email" placeholder="rahul@example.com" value="${esc(f?.email || '')}" ${f?.user_id ? 'disabled' : ''}></label>
+    <p class="hint muted small">${f?.user_id ? 'They’re on Evenly and see everything you share.' : 'Their email connects you. If they’re already on Evenly they see your expenses straight away and get notified. If not, everything appears when they sign up with this email.'}</p>
     <label class="f">Default currency<select id="fCur">${currencyOptions(g?.currency || defaultCurrency())}</select></label>
     ${g && !f?.user_id ? `<button type="button" class="btn" id="fInvite">${icon('qr-code', 16)} Invite link for ${esc(f?.name || 'them')}</button>` : ''}
     <p class="hint err" id="fHint"></p>
@@ -607,6 +607,7 @@ export function openFriendSheet(gid, then){
     ev.preventDefault();
     const name = $('#fName').value.trim(), email = $('#fEmail').value.trim().toLowerCase(), cur = $('#fCur').value, hint = $('#fHint');
     if (!name) { hint.textContent = 'Enter your friend’s name.'; return; }
+    if (!email && !f?.user_id && !g) { hint.textContent = 'Enter their email, so they can see these expenses and get notified.'; $('#fEmail').focus(); return; }
     if (email && !validEmail(email)) { hint.textContent = 'That email doesn’t look right.'; return; }
     if (email && email === (S.session.user.email || '').toLowerCase()) { hint.textContent = 'That’s your own email. Enter your friend’s.'; return; }
     busy(ev.target, true);
@@ -620,11 +621,18 @@ export function openFriendSheet(gid, then){
       return;
     }
     let ok = true;
+    const emailAdded = !f.user_id && email && email !== (f.email || '');
     if (!f.user_id && (name !== f.name || (email || null) !== (f.email || null)))
       ok = !!(await run(sb.from('group_members').update({name, email: email || null}).eq('id', f.id))) && ok;
     if (cur !== g.currency) ok = !!(await run(sb.from('groups').update({currency: cur}).eq('id', g.id))) && ok;
     busy(ev.target, false);
-    if (ok) { closeSheet(); toast('Saved'); }
+    if (!ok) return;
+    closeSheet();
+    if (emailAdded) {
+      await loadAll();
+      const linked = Object.values(S.members).flat().some(m => m.email === email && m.user_id && m.user_id !== uid());
+      toast(linked ? `Connected: ${name} can see your expenses now` : `Saved. ${name} will be connected when they sign up with ${email}.`);
+    } else toast('Saved');
   });
 }
 
