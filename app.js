@@ -25,7 +25,7 @@ const S = {
 };
 
 /* ---------- backend ---------- */
-const cfg = window.KITTY_CONFIG || {};
+const cfg = window.EVENLY_CONFIG || {};
 const configured = cfg.SUPABASE_URL && !/YOUR-PROJECT/.test(cfg.SUPABASE_URL) && cfg.SUPABASE_ANON_KEY && !/YOUR-ANON/.test(cfg.SUPABASE_ANON_KEY);
 const sb = configured && window.supabase ? window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY) : null;
 let channel = null, reloadT = null, booted = null;
@@ -64,7 +64,7 @@ async function boot(){
   try { await sb.rpc('claim_invites'); } catch {}
   await loadAll();
   if (channel) sb.removeChannel(channel);
-  channel = sb.channel('kitty-' + uid())
+  channel = sb.channel('evenly-' + uid())
     .on('postgres_changes', {event: '*', schema: 'public'}, scheduleReload)
     .subscribe();
 }
@@ -163,7 +163,7 @@ function computeSplit(total, mode, members, inc, inputs, cur){
 }
 
 /* ---------- rendering ---------- */
-const brand = `<div class="brand"><span class="mark" aria-hidden="true">K</span>Kitty</div>`;
+const brand = `<div class="brand"><span class="mark" aria-hidden="true">E</span>Evenly</div>`;
 function render(){
   const app = $('#app');
   if (!sb) { app.innerHTML = renderSetup(); return; }
@@ -177,7 +177,7 @@ function render(){
 }
 function renderSetup(){
   return `<header class="top">${brand}</header><div class="empty"><h1>Almost there</h1>
-    <p>Kitty needs its free Supabase database. Open <code>config.js</code> and paste your project URL and anon key, then reload this page.</p>
+    <p>Evenly needs its free Supabase database. Open <code>config.js</code> and paste your project URL and anon key, then reload this page.</p>
     <p>The full steps are in <code>README.md</code>.</p></div>`;
 }
 function renderAuth(){

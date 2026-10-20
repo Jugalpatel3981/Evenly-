@@ -1,7 +1,7 @@
-# Kitty Splits
+# Evenly
 
 A free Splitwise-style app. Friends make accounts and add shared expenses to
-groups. Kitty keeps a live tally of who owes whom and works out the fewest
+groups. Evenly keeps a live tally of who owes whom and works out the fewest
 payments to settle up.
 
 - Sign up, sign in and reset a password by email
@@ -33,7 +33,7 @@ plus any static host for the website.
 ### 3. Put it online
 Choose one option:
 - **Netlify Drop (easiest):** go to <https://app.netlify.com/drop> and drag this
-  whole folder onto the page. You get a link like `https://kitty-123.netlify.app`.
+  whole folder onto the page. You get a link like `https://evenly-123.netlify.app`.
 - **GitHub Pages:** push this folder to a GitHub repo, then go to
   **Settings > Pages > Deploy from branch**.
 - **Vercel / Cloudflare Pages:** import the repo. No build command is needed.
