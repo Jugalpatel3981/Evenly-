@@ -416,6 +416,44 @@ export async function restoreExpense(activityId){
   if (ok && $('#sheet').open) closeSheet();
 }
 
+/* ---------- find people on Evenly by name ---------- */
+// Search-as-you-type over Evenly accounts. onPick gets {user, name, avatar} for an account,
+// {email, name} for a typed email, or {name} for someone who isn't on Evenly yet.
+function personPicker({input, results, onPick, exclude = () => new Set(), inviteLabel}){
+  let seq = 0, timer = null, last = [];
+  const draw = q => {
+    const looksEmail = validEmail(q.toLowerCase());
+    const rows = last.filter(p => !exclude().has(p.id)).map((p, i) => `<button type="button" class="row" data-pick-i="${i}">
+      ${avatar(p.name, p.avatar_url)}<span class="main"><span class="title">${esc(p.name)}</span>
+      <span class="sub">${esc(p.hint)}${p.shared ? ' · in your groups' : ''}</span></span><span class="btn sm primary">Add</span></button>`);
+    if (q && looksEmail && !last.length) rows.push(`<button type="button" class="row" data-pick-email>
+      <span class="av">${icon('mail')}</span><span class="main"><span class="title">Add ${esc(q)}</span><span class="sub">Not on Evenly yet. They’re connected when they sign up with this email.</span></span></button>`);
+    if (q && !looksEmail && q.length >= 2) rows.push(`<button type="button" class="row" data-pick-name>
+      <span class="av">${icon('share-2')}</span><span class="main"><span class="title">${inviteLabel(q)}</span><span class="sub">Not on Evenly yet? Send them a link to join.</span></span></button>`);
+    results.innerHTML = rows.join('');
+    results.hidden = !rows.length;
+  };
+  const search = async () => {
+    const q = input.value.trim(), mine = ++seq;
+    if (q.length < 2) { last = []; draw(q); return; }
+    const {data, error} = await sb.rpc('search_people', {p_q: q});
+    if (mine !== seq) return;          // a newer search has started
+    last = error ? [] : data || [];
+    draw(q);
+  };
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); results.querySelector('.row')?.click(); } });
+  results.addEventListener('click', e => {
+    const r = e.target.closest('.row'); if (!r) return;
+    const q = input.value.trim();
+    if (r.dataset.pickI != null) { const p = last.filter(x => !exclude().has(x.id))[+r.dataset.pickI]; onPick({user: p.id, name: p.name, avatar: p.avatar_url}); }
+    else if ('pickEmail' in r.dataset) { const local = q.split('@')[0].replace(/[._-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()); onPick({email: q.toLowerCase(), name: local.slice(0, 40)}); }
+    else if ('pickName' in r.dataset) onPick({name: q.slice(0, 40)});
+    input.value = ''; last = []; draw('');
+  });
+  results.hidden = true;
+}
+
 /* ---------- groups ---------- */
 function memberTag(m){
   if (m.user_id === uid()) return '<span class="tag on">you</span>';
@@ -443,8 +481,9 @@ export function openGroupSheet(gid){
         ${g.cover_url ? `<button type="button" class="btn sm ghost" id="gCoverRm">Remove</button>` : ''}</div></div>
       <button type="button" class="btn" id="gInvite">${icon('qr-code', 16)} Invite link and QR code</button>` : ''}
     <div><div class="f-l">People</div><div class="split-rows" id="gMembers"></div></div>
-    <div class="mem-add"><input id="gNewName" maxlength="40" placeholder="Name" aria-label="New person’s name"><input id="gNewEmail" type="email" placeholder="Email (optional)" aria-label="New person’s email"><button type="button" class="btn" id="gAdd">Add</button></div>
-    <p class="hint muted small">Add each person’s email so they see this group and get notified. Without one they’re only a name here, until they join with the invite link.</p>
+    <label class="f">Add people<input id="gFind" placeholder="Type a name or email" autocomplete="off"></label>
+    <div class="list" id="gResults"></div>
+    <p class="hint muted small">Find friends who are on Evenly by name. Anyone else can join with the group’s invite link.</p>
     <p class="hint err" id="gHint"></p>
     <div class="actions">
       ${g ? `<button type="button" class="btn" id="gLeave" ${settled ? '' : 'disabled title="Settle up before leaving"'}>${icon('door-open', 15)} Leave</button>` : ''}
@@ -459,7 +498,8 @@ export function openGroupSheet(gid){
     const ex = F.existing.map((m, i) => m.removed ? '' : `<div class="ms">${avatar(personName(m), avatarUrl(m))}
       <input type="text" value="${esc(m.name)}" data-ex="${i}" aria-label="Name" style="flex:1;width:auto;text-align:left" ${m.user_id ? 'disabled' : ''}>${memberTag(m)}
       ${m.user_id ? '' : `<button type="button" class="btn ghost sm" data-rmex="${i}" ${used.has(m.id) ? 'disabled title="Has expenses in this group"' : ''}>Remove</button>`}</div>`).join('');
-    const ad = F.added.map((m, i) => `<div class="ms">${avatar(m.name)}<span class="nm">${esc(m.name)}${m.email ? ` <span class="muted" style="font-weight:500">${esc(m.email)}</span>` : ''}</span>
+    const ad = F.added.map((m, i) => `<div class="ms">${avatar(m.name, m.avatar)}<span class="nm">${esc(m.name)}${m.email ? ` <span class="muted" style="font-weight:500">${esc(m.email)}</span>` : ''}</span>
+      ${m.user ? '<span class="tag on">on Evenly</span>' : m.email ? '<span class="tag">invited</span>' : '<span class="tag">needs invite link</span>'}
       <button type="button" class="btn ghost sm" data-rmad="${i}">Remove</button></div>`).join('');
     list.innerHTML = meRow + ex + ad || `<div class="ms muted">Add everyone who shares costs.</div>`;
   };
@@ -470,16 +510,10 @@ export function openGroupSheet(gid){
     if (a) { F.added.splice(+a.dataset.rmad, 1); draw(); }
     if (x && !x.disabled) { F.existing[+x.dataset.rmex].removed = true; draw(); }
   });
-  const add = () => {
-    const n = $('#gNewName').value.trim(), em = $('#gNewEmail').value.trim().toLowerCase();
-    if (!n) { hint.textContent = 'Type a name first.'; return false; }
-    if (em && !validEmail(em)) { hint.textContent = 'That email doesn’t look right.'; return false; }
-    hint.textContent = '';
-    F.added.push({name: n, email: em}); $('#gNewName').value = ''; $('#gNewEmail').value = ''; draw(); $('#gNewName').focus();
-    return true;
-  };
-  $('#gAdd').addEventListener('click', add);
-  ['#gNewName', '#gNewEmail'].forEach(s => $(s).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }));
+  personPicker({input: $('#gFind'), results: $('#gResults'),
+    exclude: () => new Set([uid(), ...F.existing.map(m => m.user_id).filter(Boolean), ...F.added.map(m => m.user).filter(Boolean)]),
+    inviteLabel: q => `Add “${esc(q)}” and invite them later`,
+    onPick: m => { F.added.push(m); hint.textContent = ''; draw(); $('#gFind').focus(); }});
   if (g) {
     $('#gInvite').addEventListener('click', () => openInviteSheet(g.id));
     $('#gCover').addEventListener('change', async ev => {
@@ -504,12 +538,11 @@ export function openGroupSheet(gid){
   }
   $('#gForm').addEventListener('submit', async e => {
     e.preventDefault();
-    if ($('#gNewName').value.trim() && !add()) return;
     const name = $('#gName').value.trim();
     if (!name) { hint.textContent = 'Give the group a name.'; return; }
     const form = e.target; busy(form, true);
     if (!g) {
-      const id = await run(sb.rpc('create_group', {p_name: name, p_currency: $('#gCur').value, p_my_name: myName(), p_members: F.added}));
+      const id = await run(sb.rpc('create_group', {p_name: name, p_currency: $('#gCur').value, p_my_name: myName(), p_members: F.added.map(m => ({name: m.name, email: m.email || null, user: m.user || null}))}));
       if (id) {
         await sb.from('groups').update({type: F.type}).eq('id', id);
         await loadAll();
@@ -528,7 +561,7 @@ export function openGroupSheet(gid){
       if (m.removed) ok = !!(await run(sb.from('group_members').delete().eq('id', m.id))) && ok;
       else if (orig && !m.user_id && orig.name !== m.name.trim()) ok = !!(await run(sb.from('group_members').update({name: m.name.trim()}).eq('id', m.id))) && ok;
     }
-    for (const m of F.added) ok = !!(await run(sb.rpc('add_member', {p_group: g.id, p_name: m.name, p_email: m.email || null}))) && ok;
+    for (const m of F.added) ok = !!(await run(sb.rpc('add_member', {p_group: g.id, p_name: m.name, p_email: m.email || null, p_user: m.user || null}))) && ok;
     busy(form, false);
     if (ok) { closeSheet(); toast('Saved'); }
   });
@@ -586,6 +619,7 @@ export async function openJoinSheet(code){
 
 /* ---------- friends ---------- */
 export function openFriendSheet(gid, then){
+  if (!gid) return openFindFriendSheet(then);
   const g = gid ? S.groups[gid] : null, f = g ? friendOf(g.id) : null;
   const settled = g ? !Object.values(myBalance(g.id)).some(v => v) : true;
   openSheet(`<form class="sheet-in" id="fForm" novalidate>${head(g ? 'Friend settings' : 'Add a friend')}
@@ -661,4 +695,30 @@ async function uploadReceipt(gid, expenseId, file){
 export async function sendReminder(gid, mid, amount, cur){
   const ok = await run(sb.rpc('send_reminder', {p_group: gid, p_member: mid, p_amount: Number(amount), p_currency: cur}));
   if (ok) toast(`Reminder sent to ${nameOf(gid, mid)}`);
+}
+
+/* ---------- add a friend: search by name ---------- */
+function openFindFriendSheet(then){
+  openSheet(`<div class="sheet-in">${head('Add a friend')}
+    <label class="f">Find your friend<input id="fFind" placeholder="Type their name or email" autocomplete="off" autofocus></label>
+    <div class="list" id="fResults"></div>
+    <p class="hint muted small" id="fHelp">Search everyone on Evenly by name. Not on Evenly yet? You can send them a link.</p>
+    <p class="hint err" id="fHint"></p></div>`);
+  const known = new Set([...friendsIndex().values()].filter(f => f.ledger && f.userId).map(f => f.userId));
+  personPicker({input: $('#fFind'), results: $('#fResults'),
+    exclude: () => new Set([uid()]),
+    inviteLabel: q => `Invite “${esc(q)}” with a link`,
+    onPick: async m => {
+      $('#fHint').textContent = '';
+      const {data: id, error} = await sb.rpc('add_friend', {p_my_name: myName(), p_name: m.name, p_email: m.email || null, p_currency: defaultCurrency(), p_friend_user: m.user || null});
+      if (error) { $('#fHint').textContent = friendly(error); return; }
+      await loadAll();
+      if (!m.user && !m.email) {
+        // Not on Evenly: show the invite link straight away.
+        go('group', {gid: id, tab: 'expenses'}); openInviteSheet(id); return;
+      }
+      closeSheet();
+      if (then) then(id); else go('group', {gid: id, tab: 'expenses'});
+      toast(m.user ? (known.has(m.user) ? `You and ${m.name} are already friends` : `Connected with ${m.name}`) : `${m.name} added. They’re connected when they sign up with ${m.email}.`);
+    }});
 }

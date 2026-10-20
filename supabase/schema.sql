@@ -73,8 +73,15 @@ begin
   insert into public.group_members (group_id, user_id, name, email)
     values (gid, auth.uid(), trim(p_my_name), lower(auth.email()));
   for m in select * from jsonb_array_elements(coalesce(p_members, '[]'::jsonb)) loop
-    insert into public.group_members (group_id, name, email)
-      values (gid, trim(m->>'name'), nullif(lower(trim(m->>'email')), ''));
+    if nullif(m->>'user', '') is not null then
+      insert into public.group_members (group_id, user_id, name, email)
+        select gid, u.id, trim(m->>'name'), lower(u.email) from auth.users u
+         where u.id = (m->>'user')::uuid and u.email_confirmed_at is not null and u.id <> auth.uid()
+        on conflict do nothing;
+    else
+      insert into public.group_members (group_id, name, email)
+        values (gid, trim(m->>'name'), nullif(lower(trim(m->>'email')), ''));
+    end if;
   end loop;
   -- Anyone you invited who already has an account is linked straight away.
   update public.group_members gm set user_id = u.id
@@ -98,9 +105,9 @@ declare
 begin
   if auth.uid() is null then raise exception 'Sign in first'; end if;
   if p_friend_user is not null then
-    if p_friend_user = auth.uid() or not public.shares_group(p_friend_user) then raise exception 'You can only add people you share a group with'; end if;
-    fid := p_friend_user;
-    select lower(u.email) into em from auth.users u where u.id = fid;
+    if p_friend_user = auth.uid() then raise exception 'That''s you. Pick a friend instead.'; end if;
+    select u.id, lower(u.email) into fid, em from auth.users u where u.id = p_friend_user and u.email_confirmed_at is not null;
+    if fid is null then raise exception 'That person can''t be found.'; end if;
   end if;
   if em is not null and em = lower(auth.email()) then raise exception 'That is your own email. Enter your friend''s email.'; end if;
   if em is not null and fid is null then
@@ -124,16 +131,23 @@ begin
   return gid;
 end $$;
 
--- Adds a person to a group you belong to, linking them if they already have an account.
-create or replace function public.add_member(p_group uuid, p_name text, p_email text)
+-- Adds a person to a group you belong to: an account picked from search (p_user),
+-- or a name with an optional email that links them when they have an account.
+drop function if exists public.add_member(uuid, text, text);
+create or replace function public.add_member(p_group uuid, p_name text, p_email text, p_user uuid default null)
 returns uuid language plpgsql security definer set search_path = public as $$
 declare
   mid uuid;
-  uid uuid;
+  uid uuid := p_user;
   em text := nullif(lower(trim(p_email)), '');
 begin
   if not public.is_member(p_group) then raise exception 'Not a member of this group'; end if;
-  if em is not null then
+  if uid is not null then
+    select lower(u.email) into em from auth.users u where u.id = uid and u.email_confirmed_at is not null;
+    if em is null then raise exception 'That person can''t be found.'; end if;
+    select id into mid from public.group_members where group_id = p_group and user_id = uid;
+    if mid is not null then return mid; end if;
+  elsif em is not null then
     select u.id into uid from auth.users u
      where lower(u.email) = em and u.email_confirmed_at is not null
        and not exists (select 1 from public.group_members x where x.group_id = p_group and x.user_id = u.id)
@@ -161,12 +175,12 @@ end $$;
 
 revoke all on function public.is_member(uuid) from public, anon;
 revoke all on function public.create_group(text, text, text, jsonb) from public, anon;
-revoke all on function public.add_member(uuid, text, text) from public, anon;
+revoke all on function public.add_member(uuid, text, text, uuid) from public, anon;
 revoke all on function public.add_friend(text, text, text, text, uuid) from public, anon;
 revoke all on function public.claim_invites() from public, anon;
 grant execute on function public.is_member(uuid) to authenticated;
 grant execute on function public.create_group(text, text, text, jsonb) to authenticated;
-grant execute on function public.add_member(uuid, text, text) to authenticated;
+grant execute on function public.add_member(uuid, text, text, uuid) to authenticated;
 grant execute on function public.add_friend(text, text, text, text, uuid) to authenticated;
 grant execute on function public.claim_invites() to authenticated;
 
@@ -898,6 +912,55 @@ begin
     perform public.merge_direct_ledgers(r.x, r.y);
   end loop;
 end $$;
+
+-- =====================================================================
+-- Find friends by name.
+-- =====================================================================
+
+-- Everyone gets a profile with the name they signed up with, so friends can find them.
+create or replace function public.profile_for_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.profiles (id, name)
+    values (new.id, left(coalesce(nullif(trim(new.raw_user_meta_data->>'name'), ''), split_part(new.email, '@', 1)), 40))
+    on conflict (id) do nothing;
+  return new;
+exception when others then
+  return new;   -- never block a sign-up
+end $$;
+do $$
+begin
+  if exists (select 1 from information_schema.columns where table_schema = 'auth' and table_name = 'users' and column_name = 'raw_user_meta_data') then
+    execute 'drop trigger if exists evenly_new_user on auth.users';
+    execute 'create trigger evenly_new_user after insert on auth.users for each row execute function public.profile_for_new_user()';
+    -- People who signed up before this existed.
+    execute $q$insert into public.profiles (id, name)
+      select u.id, left(coalesce(nullif(trim(u.raw_user_meta_data->>'name'), ''), split_part(u.email, '@', 1)), 40) from auth.users u
+      on conflict (id) do nothing$q$;
+  end if;
+end $$;
+
+-- Up to 8 people whose name matches, or whose email is exactly what was typed.
+-- Emails are never shown, only a hint like j•••••@gmail.com to tell people with the same name apart.
+create or replace function public.search_people(p_q text)
+returns table (id uuid, name text, avatar_url text, hint text, shared boolean)
+language sql stable security definer set search_path = public as $$
+  with q as (select trim(p_q) as t,
+                    '%' || replace(replace(replace(trim(p_q), '\', '\\'), '%', '\%'), '_', '\_') || '%' as pat)
+  select p.id, p.name, p.avatar_url,
+         left(u.email, 1) || repeat('•', least(greatest(length(split_part(u.email, '@', 1)) - 1, 3), 6)) || '@' || split_part(u.email, '@', 2),
+         public.shares_group(p.id)
+    from public.profiles p
+    join auth.users u on u.id = p.id
+    cross join q
+   where auth.uid() is not null and p.id <> auth.uid() and u.email_confirmed_at is not null
+     and char_length(q.t) >= 2
+     and (p.name ilike q.pat or lower(u.email) = lower(q.t))
+   order by public.shares_group(p.id) desc, (lower(p.name) like lower(q.t) || '%') desc, p.name
+   limit 8
+$$;
+revoke all on function public.search_people(text) from public, anon;
+grant execute on function public.search_people(text) to authenticated;
 
 -- ---------- live updates ----------
 do $$
