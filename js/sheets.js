@@ -521,6 +521,8 @@ function personPicker({input, results, onPick, exclude = () => new Set(), invite
     if (mine !== seq) return;          // a newer search has started
     last = error ? [] : data || [];
     draw(q);
+    // Say so if search itself failed, rather than looking like nobody matched.
+    if (error) results.insertAdjacentHTML('afterbegin', `<div class="row static"><span class="main"><span class="wrap-text neg small">${esc(friendly(error))}</span></span></div>`), results.hidden = false;
   };
   input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
   input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); results.querySelector('.row')?.click(); } });
