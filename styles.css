@@ -99,7 +99,8 @@ dialog#sheet::backdrop{background:rgb(8 16 13 / .5)}
 .sheet-h{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .f{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--muted);font-weight:650;min-width:0}
 .f-l{font-size:13px;color:var(--muted);font-weight:650;margin-bottom:6px}
-input,select,textarea{font:inherit;font-weight:500;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;box-sizing:border-box;min-width:0}
+/* 16px stops iPhones zooming the page in when a field is tapped. */
+input,select,textarea{font:inherit;font-size:16px;font-weight:500;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;box-sizing:border-box;min-width:0}
 input[type="checkbox"]{width:20px;height:20px;accent-color:var(--accent);flex:none;margin:0}
 .amount-input{font-family:var(--font-display);font-size:26px;font-weight:700;padding-block:6px;font-variant-numeric:tabular-nums}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
