@@ -1,6 +1,6 @@
 // Evenly service worker: makes the app installable and lets it open without a connection.
 // Network first, so friends always get the latest version; the cache is only a fallback.
-const CACHE = 'evenly-v2';
+const CACHE = 'evenly-v3';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {

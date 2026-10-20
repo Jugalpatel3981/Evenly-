@@ -5,6 +5,7 @@ groups. Evenly keeps a live tally of who owes whom and works out the fewest
 payments to settle up.
 
 - Sign up, sign in and reset a password by email
+- One-to-one with a friend, no group needed (like Splitwise's Friends tab)
 - Groups with friends: invite people by email so they see the group when they sign in, or add someone by name only
 - Split equally, by exact amounts, by percentages or by shares
 - Balances, fewest-payment settle-up and a recorded payment history
@@ -59,6 +60,11 @@ When you add a friend to a group with their email, they're "invited". As soon
 as they sign up (or sign in) with that email and confirm it, the group appears
 in their account. Someone added by name only is still part of the splits; they
 just can't sign in to see them.
+
+## Updating to a new version
+1. Copy your filled-in `config.js` into the new `app` folder.
+2. If the update notes say the database changed, run `supabase/schema.sql` again in the SQL Editor. It's safe to re-run, and your data stays.
+3. In Netlify, open your site, go to **Deploys**, and drag the new `app` folder onto the upload box.
 
 ## Good to know
 - **Email limits:** Supabase's built-in email sender only allows a few emails per

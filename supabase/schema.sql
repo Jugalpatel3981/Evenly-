@@ -14,6 +14,9 @@ create table if not exists public.groups (
   created_at  timestamptz not null default now()
 );
 
+-- One-to-one friend ledgers are groups of two with is_direct = true.
+alter table public.groups add column if not exists is_direct boolean not null default false;
+
 -- A member is a person in a group. user_id links them to a login account;
 -- it is null for people who have not signed up (yet). email is the invite:
 -- when someone signs in with that confirmed email, they are linked.
@@ -82,6 +85,36 @@ begin
   return gid;
 end $$;
 
+-- Starts (or reopens) a one-to-one ledger with a friend.
+-- If you already have one with this email, that one is returned instead of a duplicate.
+create or replace function public.add_friend(p_my_name text, p_name text, p_email text, p_currency text)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare
+  gid uuid;
+  fid uuid;
+  em text := nullif(lower(trim(p_email)), '');
+begin
+  if auth.uid() is null then raise exception 'Sign in first'; end if;
+  if em is not null and em = lower(auth.email()) then raise exception 'That is your own email. Enter your friend''s email.'; end if;
+  if em is not null then
+    select u.id into fid from auth.users u where lower(u.email) = em and u.email_confirmed_at is not null limit 1;
+    select g.id into gid
+      from public.groups g
+      join public.group_members me on me.group_id = g.id and me.user_id = auth.uid()
+      join public.group_members f  on f.group_id = g.id and f.id <> me.id
+     where g.is_direct and (f.email = em or (fid is not null and f.user_id = fid))
+     limit 1;
+    if gid is not null then return gid; end if;
+  end if;
+  insert into public.groups (name, currency, created_by, is_direct)
+    values ('Friends', coalesce(nullif(p_currency, ''), 'INR'), auth.uid(), true) returning id into gid;
+  insert into public.group_members (group_id, user_id, name, email)
+    values (gid, auth.uid(), trim(p_my_name), lower(auth.email()));
+  insert into public.group_members (group_id, user_id, name, email)
+    values (gid, fid, trim(p_name), em);
+  return gid;
+end $$;
+
 -- Adds a person to a group you belong to, linking them if they already have an account.
 create or replace function public.add_member(p_group uuid, p_name text, p_email text)
 returns uuid language plpgsql security definer set search_path = public as $$
@@ -120,10 +153,12 @@ end $$;
 revoke all on function public.is_member(uuid) from public, anon;
 revoke all on function public.create_group(text, text, text, jsonb) from public, anon;
 revoke all on function public.add_member(uuid, text, text) from public, anon;
+revoke all on function public.add_friend(text, text, text, text) from public, anon;
 revoke all on function public.claim_invites() from public, anon;
 grant execute on function public.is_member(uuid) to authenticated;
 grant execute on function public.create_group(text, text, text, jsonb) to authenticated;
 grant execute on function public.add_member(uuid, text, text) to authenticated;
+grant execute on function public.add_friend(text, text, text, text) to authenticated;
 grant execute on function public.claim_invites() to authenticated;
 
 -- ---------- row level security: you only ever see groups you belong to ----------
