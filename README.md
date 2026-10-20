@@ -61,10 +61,11 @@ as they sign up (or sign in) with that email and confirm it, the group appears
 in their account. Someone added by name only is still part of the splits; they
 just can't sign in to see them.
 
-## Updating to a new version
-1. Copy your filled-in `config.js` into the new `app` folder.
-2. If the update notes say the database changed, run `supabase/schema.sql` again in the SQL Editor. It's safe to re-run, and your data stays.
-3. In Netlify, open your site, go to **Deploys**, and drag the new `app` folder onto the upload box.
+## Updating
+This repo is connected to Netlify: every push to `main` goes live automatically
+in about 30 seconds. When an update changes the database, run
+`supabase/schema.sql` again in the Supabase SQL Editor. It's safe to re-run,
+and your data stays.
 
 ## Good to know
 - **Email limits:** Supabase's built-in email sender only allows a few emails per
@@ -83,5 +84,6 @@ just can't sign in to see them.
 | `app.js` | All app logic: sign-in, groups, splits, balances |
 | `styles.css` | Look and feel (light and dark mode) |
 | `config.js` | Your Supabase URL and key |
+| `netlify.toml` | Netlify settings (no build step) |
 | `supabase/schema.sql` | Tables, security rules and functions |
 | `manifest.webmanifest`, `sw.js`, `icon-*.png` | Let phones install it like an app |
