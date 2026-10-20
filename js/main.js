@@ -178,6 +178,16 @@ async function onAvatar(file){
   } catch (err) { toast(friendly(err)); }
 }
 
+/* ---------- light / dark ---------- */
+function setTheme(t){
+  ls.set('evenly.theme', t === 'system' ? null : t);
+  if (t === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  // Keep the phone's status bar colour in step.
+  const dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#0d1412' : '#0e6650');
+  render();
+}
+
 /* ---------- clicks ---------- */
 const go = (view, extra = {}) => { Object.assign(S, {view}, extra); render(); window.scrollTo(0, 0); };
 function openFriend(key){
@@ -206,6 +216,7 @@ $('#app').addEventListener('click', ev => {
     case 'push-on': enablePush().then(() => { ls.set('evenly.pushAsked', '1'); toast('Notifications are on for this device'); }, err => toast(friendly(err))).finally(refreshPush); break;
     case 'push-off': disablePush().then(() => toast('Notifications are off for this device'), err => toast(friendly(err))).finally(refreshPush); break;
     case 'push-later': ls.set('evenly.pushAsked', '1'); render(); break;
+    case 'theme': setTheme(el.dataset.theme); break;
     case 'invite': openInviteSheet(el.dataset.id); break;
     case 'remind': sendReminder(el.dataset.gid, el.dataset.member, el.dataset.amt, el.dataset.cur); break;
     case 'signout': sb.auth.signOut(); break;

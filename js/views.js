@@ -439,6 +439,11 @@ function renderSettings(){
     <form id="nameForm" class="inline-form"><label class="f">Your name<input id="sName" maxlength="40" value="${esc(myName())}"></label><button class="btn" type="submit">Save</button></form>
     <label class="f">Default currency for new groups and friends<select id="sCur">${currencyOptions(p.default_currency || 'INR')}</select></label>
   </section>
+  <section class="card-sec"><h3>${icon(currentTheme() === 'dark' ? 'moon' : currentTheme() === 'light' ? 'sun' : 'smartphone', 15)} Appearance</h3>
+    <div class="seg wide" role="radiogroup" aria-label="Theme">${[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([k, l]) =>
+      `<button type="button" role="radio" data-act="theme" data-theme="${k}" aria-pressed="${currentTheme() === k}" aria-checked="${currentTheme() === k}">${icon(k === 'system' ? 'smartphone' : k === 'light' ? 'sun' : 'moon', 15)} ${l}</button>`).join('')}</div>
+    <p class="hint muted small" style="margin:0">System follows your phone’s light or dark setting. Saved on this device.</p>
+  </section>
   <section class="card-sec"><h3>${icon('bell', 15)} Notifications</h3>
     <div class="spread wrapflex"><span><b>Phone notifications</b><br><span class="muted small">${pushHelp()}</span></span>${pushButton()}</div>
     <label class="switch"><input type="checkbox" id="sEmailNotes" ${p.notify_email === false ? '' : 'checked'}><span><b>Email notifications</b><br><span class="muted small">An email when someone adds, changes or deletes an expense you’re in, comments, or reminds you.</span></span></label>
@@ -470,6 +475,8 @@ function renderSettings(){
     <form id="deleteForm" class="inline-form"><label class="f">Type DELETE to confirm<input id="sDel" autocomplete="off"></label><button class="btn danger" type="submit">Delete my account</button></form>
   </section>`;
 }
+
+export function currentTheme(){ try { return localStorage.getItem('evenly.theme') || 'system'; } catch { return 'system'; } }
 
 /* ---------- notifications ---------- */
 // Can Evenly reach this member? Only people with an account or an email address.
