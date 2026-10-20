@@ -27,8 +27,9 @@
 <dialog id="sheet" aria-label="Form"><div id="sheetBody"></div></dialog>
 <div id="toast" role="status" aria-live="polite" hidden></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="vendor/qrcode.js"></script>
 <script src="config.js"></script>
-<script src="app.js"></script>
+<script type="module" src="js/main.js"></script>
 <script>
   if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 </script>
