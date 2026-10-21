@@ -64,7 +64,70 @@ export async function loadAll(){
   S.activity = a;
   S.notifications = nt;
   S.ready = true;
+  S.offline = false;
+  saveSnapshot();
   emit();
+}
+
+/* ---------- offline: a copy of the data on this device, and a queue of changes to send ---------- */
+const snapKey = () => 'evenly.cache.' + uid(), OUTBOX = () => 'evenly.outbox.' + uid();
+export const isNetworkError = err => !navigator.onLine || /Failed to fetch|NetworkError|Load failed|network|fetch failed/i.test((err && (err.message || err.error_description)) || String(err));
+function saveSnapshot(){
+  try {
+    localStorage.setItem(snapKey(), JSON.stringify({at: Date.now(), groups: S.groups, members: S.members, expenses: S.expenses,
+      profiles: S.profiles, activity: S.activity.slice(0, 100), notifications: S.notifications.slice(0, 50)}));
+  } catch { /* storage full or blocked: offline copy is a nice-to-have */ }
+}
+// Used when the server can't be reached: show the last copy, plus any changes still waiting to be sent.
+export function loadSnapshot(){
+  let snap = null;
+  try { snap = JSON.parse(localStorage.getItem(snapKey()) || 'null'); } catch {}
+  if (!snap) return false;
+  Object.assign(S, {groups: snap.groups, members: snap.members, expenses: snap.expenses, profiles: snap.profiles,
+    activity: snap.activity || [], notifications: snap.notifications || [], ready: true, offline: true, snapshotAt: snap.at});
+  outbox().forEach(applyLocal);
+  emit();
+  return true;
+}
+export const outbox = () => { try { return JSON.parse(localStorage.getItem(OUTBOX()) || '[]'); } catch { return []; } };
+const setOutbox = list => { try { localStorage.setItem(OUTBOX(), JSON.stringify(list)); } catch {} };
+function applyLocal({table, op, row, id}){
+  if (table !== 'expenses') return;
+  if (op === 'delete') delete S.expenses[id];
+  else S.expenses[id] = {...(S.expenses[id] || {created_at: new Date().toISOString()}), ...row, id, pending: true};
+}
+const request = ({table, op, row, id}) => op === 'insert' ? sb.from(table).insert(row) : op === 'update' ? sb.from(table).update(row).eq('id', id) : sb.from(table).delete().eq('id', id);
+// Save a change; if there's no connection, keep it on the device and send it later.
+export async function save(table, op, row, id, okMsg){
+  const change = {table, op, row, id};
+  if (navigator.onLine) {
+    const {error} = await request(change);
+    if (!error) { if (okMsg) toastHook(okMsg); scheduleReload(); return true; }
+    if (!isNetworkError(error)) { toastHook(friendly(error)); return null; }
+  }
+  setOutbox([...outbox(), change]);
+  applyLocal(change);
+  S.offline = true;
+  saveSnapshot();
+  toastHook(`${okMsg || 'Saved'}. It will sync when you’re back online.`);
+  emit();
+  return true;
+}
+// Send queued changes in order. Stops at the first one the network refuses, and tries again later.
+let flushing = false;
+export async function flushOutbox(){
+  if (flushing || !navigator.onLine || !uid()) return;
+  flushing = true;
+  let list = outbox(), sent = 0;
+  try {
+    while (list.length) {
+      const {error} = await request(list[0]);
+      if (error && isNetworkError(error)) break;
+      if (error) toastHook(`A change made offline couldn’t be saved: ${friendly(error)}`); else sent++;
+      list = list.slice(1); setOutbox(list);
+    }
+  } finally { flushing = false; }
+  if (sent) { toastHook(`Synced ${sent} change${sent > 1 ? 's' : ''} made offline`); await loadAll().catch(() => {}); }
 }
 let reloadT = null;
 export const scheduleReload = () => { clearTimeout(reloadT); reloadT = setTimeout(() => loadAll().catch(err => toastHook(friendly(err))), 250); };

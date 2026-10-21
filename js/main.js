@@ -1,11 +1,12 @@
 // Startup, sign-in and every click on the page.
-import { S, sb, uid, myName, myProfile, onChange, loadAll, scheduleReload, setToast, friendly, run, ls } from './state.js';
+import { S, sb, uid, myName, myProfile, onChange, loadAll, scheduleReload, setToast, friendly, run, ls, loadSnapshot, flushOutbox, isNetworkError } from './state.js';
 import { pushStatus, enablePush, disablePush } from './push.js';
+import { refreshRates } from './rates.js';
 import { validEmail, appUrl } from './util.js';
 import { $, toast, initSheet, busy, resizeImage, copyText } from './ui.js';
 import { renderSetup, renderAuth, renderRecovery, renderApp } from './views.js';
 import { openExpenseSheet, openPickSheet, expenseWithFriend, openExpenseDetail, openSettleSheet, openDeletedSheet,
-         restoreExpense, openGroupSheet, openFriendSheet, openJoinSheet, openInviteSheet, copySummary, sendReminder, openSearchSheet, openFilterSheet } from './sheets.js';
+         restoreExpense, openGroupSheet, openFriendSheet, openJoinSheet, openInviteSheet, copySummary, sendReminder, openSearchSheet, openFilterSheet, openBudgetSheet, exportGroupCsv, downloadBackup } from './sheets.js';
 
 setToast(toast);
 initSheet();
@@ -63,18 +64,24 @@ async function boot(){
   booted = uid(); S.ready = false; render();
   try { await sb.rpc('claim_invites'); } catch {}
   try {
+    await flushOutbox();
     await loadAll();
     if (!myProfile()) {
       await sb.from('profiles').upsert({id: uid(), name: myName()}, {onConflict: 'id', ignoreDuplicates: true});
     }
     const {data: made} = await sb.rpc('process_recurring');
     if (made || !myProfile()) await loadAll();
-  } catch (err) { toast(friendly(err)); }
+  } catch (err) {
+    // No connection: open with the copy saved on this device.
+    if (isNetworkError(err) && loadSnapshot()) toast('You’re offline. Showing your last saved balances.');
+    else toast(friendly(err));
+  }
   if (channel) sb.removeChannel(channel);
   channel = sb.channel('evenly-' + uid())
     .on('postgres_changes', {event: '*', schema: 'public'}, scheduleReload)
     .subscribe();
   refreshPush();
+  refreshRates().then(r => { if (r) render(); });
   if (S.pendingInvite) openJoinSheet(S.pendingInvite);
   else if (pendingOpen) openTarget(pendingOpen);
 }
@@ -188,6 +195,10 @@ function setTheme(t){
   render();
 }
 
+/* ---------- back online ---------- */
+window.addEventListener('online', async () => { if (!S.session) return; await flushOutbox(); loadAll().catch(() => {}); });
+window.addEventListener('offline', () => { if (S.session) { S.offline = true; render(); } });
+
 /* ---------- clicks ---------- */
 const go = (view, extra = {}) => { Object.assign(S, {view}, extra); render(); window.scrollTo(0, 0); };
 function openFriend(key){
@@ -205,7 +216,8 @@ $('#app').addEventListener('click', ev => {
   switch (a) {
     case 'open-group': go('group', {gid: el.dataset.id, tab: 'expenses'}); break;
     case 'open-friend': openFriend(el.dataset.key); break;
-    case 'home': S.homeTab = g?.is_direct || S.view === 'friend' ? 'friends' : S.view === 'group' ? 'groups' : S.homeTab; go('home'); break;
+    case 'home': if (S.view === 'spending') { S.homeTab = 'account'; go('home'); break; }
+      S.homeTab = g?.is_direct || S.view === 'friend' ? 'friends' : S.view === 'group' ? 'groups' : S.homeTab; go('home'); break;
     case 'home-tab': S.homeTab = el.dataset.tab; if (S.homeTab !== 'account') ls.set('evenly.homeTab', S.homeTab); go('home'); if (S.homeTab === 'activity' && S.actTab === 'foryou') markRead(); break;
     case 'act-tab': S.actTab = el.dataset.tab; render(); if (S.actTab === 'foryou') markRead(); break;
     case 'search': openSearchSheet(); break;
@@ -217,6 +229,12 @@ $('#app').addEventListener('click', ev => {
     case 'push-off': disablePush().then(() => toast('Notifications are off for this device'), err => toast(friendly(err))).finally(refreshPush); break;
     case 'push-later': ls.set('evenly.pushAsked', '1'); render(); break;
     case 'theme': setTheme(el.dataset.theme); break;
+    case 'spending': S.spendMonth = null; go('spending'); break;
+    case 'spend-month': { const [y, m] = (S.spendMonth || '').split('-').map(Number), d = y ? new Date(y, m - 1, 1) : new Date();
+      d.setDate(1); d.setMonth(d.getMonth() + Number(el.dataset.step)); S.spendMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; render(); break; }
+    case 'budget': openBudgetSheet(el.dataset.key); break;
+    case 'export': exportGroupCsv(el.dataset.id); break;
+    case 'backup': downloadBackup(); break;
     case 'invite': openInviteSheet(el.dataset.id); break;
     case 'remind': sendReminder(el.dataset.gid, el.dataset.member, el.dataset.amt, el.dataset.cur); break;
     case 'signout': sb.auth.signOut(); break;

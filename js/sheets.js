@@ -1,22 +1,25 @@
 // Forms and detail panels that open in the bottom sheet.
-import { S, sb, uid, myName, defaultCurrency, run, loadAll, emit, friendly, ls, membersOf, expOf, member, nameOf,
+import { S, sb, uid, myName, defaultCurrency, run, save, loadAll, emit, friendly, ls, membersOf, expOf, member, nameOf,
          myId, friendOf, titleOf, personName, avatarUrl, myBalance, groupBalances, friendsIndex } from './state.js';
 import { esc, fmt, toMinor, fromMinor, today, niceDate, ago, validEmail, appUrl, curSymbol } from './util.js';
 import { computeSplit, computePayers, payersOf, curOf, simplify, pairwise } from './money.js';
-import { catOf, categoryOptions, guessCategory, GROUP_TYPES } from './categories.js';
+import { catOf, categoryOptions, guessCategory, GROUP_TYPES, CATEGORY_GROUPS } from './categories.js';
 import { icon } from './icons.js';
-import { $, toast, openSheet, closeSheet, head, busy, armDelete, avatar, catIcon, payIcon, currencyOptions, resizeImage, copyText } from './ui.js';
+import { rates, toCurrency } from './rates.js';
+import { $, toast, openSheet, closeSheet, head, busy, armDelete, avatar, catIcon, payIcon, currencyOptions, resizeImage, copyText, downloadFile } from './ui.js';
 
 const REPEATS = [['never', 'Doesn’t repeat'], ['weekly', 'Every week'], ['biweekly', 'Every 2 weeks'], ['monthly', 'Every month'], ['yearly', 'Every year']];
-const MODES = [['equal', 'Equally'], ['exact', 'Exact'], ['percent', '%'], ['shares', 'Shares'], ['adjust', '+/−']];
+const MODES = [['equal', 'Equally'], ['exact', 'Exact'], ['percent', '%'], ['shares', 'Shares'], ['adjust', '+/−'], ['items', 'Items']];
 const go = (view, extra = {}) => { Object.assign(S, {view}, extra); emit(); window.scrollTo(0, 0); };
 
 /* ---------- split editor, shared by the group and multi-friend forms ---------- */
 // people: [{id, name}]. Renders mode buttons into modeEl and per-person rows into rowsEl.
 function splitEditor({modeEl, rowsEl, hintEl, people, mode, inc, inputs, getTotal, getCur}){
   const st = {mode, inc, inputs: {exact: {}, percent: {}, shares: {}, adjust: {}, ...inputs}};
+  const ids0 = people.map(p => p.id);
+  if (!st.inputs.items?.list?.length) st.inputs.items = {list: [{name: '', amount: '', people: [...ids0]}]};
   const ids = people.map(p => p.id);
-  modeEl.innerHTML = MODES.map(([k, l]) => `<button type="button" data-mode="${k}" aria-pressed="${st.mode === k}" title="${{equal: 'Split equally', exact: 'Exact amounts', percent: 'By percentage', shares: 'By shares', adjust: 'Equally, with adjustments'}[k]}">${l}</button>`).join('');
+  modeEl.innerHTML = MODES.map(([k, l]) => `<button type="button" data-mode="${k}" aria-pressed="${st.mode === k}" title="${{equal: 'Split equally', exact: 'Exact amounts', percent: 'By percentage', shares: 'By shares', adjust: 'Equally, with adjustments', items: 'Item by item'}[k]}">${l}</button>`).join('');
   const compute = () => computeSplit(getTotal(), st.mode, ids, st.inc, st.inputs[st.mode] || {}, getCur(), s => toMinor(s, getCur()));
   const update = () => {
     const r = compute();
@@ -25,7 +28,32 @@ function splitEditor({modeEl, rowsEl, hintEl, people, mode, inc, inputs, getTota
     hintEl.textContent = r.error || r.msg || '';
     return r;
   };
+  const short = n => n === 'You' ? 'You' : String(n).split(/\s+/)[0];
+  const drawItems = () => {
+    const list = st.inputs.items.list;
+    rowsEl.innerHTML = list.map((it, i) => `<div class="item-row">
+        <div class="item-top"><input type="text" class="it-name" data-it-name="${i}" maxlength="60" placeholder="Item ${i + 1}" value="${esc(it.name)}" aria-label="Item name">
+          <input type="text" class="it-amt" inputmode="decimal" data-it-amt="${i}" placeholder="0.00" value="${esc(it.amount)}" aria-label="Item price">
+          <button type="button" class="btn ghost icon-btn" data-it-del="${i}" aria-label="Remove item">${icon('x', 16)}</button></div>
+        <div class="who">${people.map(p => `<button type="button" class="who-chip" data-it-p="${i}" data-pid="${esc(p.id)}" aria-pressed="${it.people.includes(p.id)}">${esc(short(p.name))}</button>`).join('')}</div>
+      </div>`).join('')
+      + `<button type="button" class="btn sm" data-it-add style="margin:8px 12px">${icon('plus', 14)} Add item</button>
+      <div class="item-shares">${people.map(p => `<div class="ms"><span class="nm">${esc(p.name)}</span><span class="share" data-share="${esc(p.id)}"></span></div>`).join('')}</div>`;
+    update();
+  };
+  rowsEl.addEventListener('click', ev => {
+    if (st.mode !== 'items') return;
+    const list = st.inputs.items.list, t = ev.target.closest('button'); if (!t) return;
+    if ('itAdd' in t.dataset) { list.push({name: '', amount: '', people: [...ids0]}); drawItems(); rowsEl.querySelectorAll('.it-name')[list.length - 1]?.focus(); }
+    else if (t.dataset.itDel != null) { list.splice(+t.dataset.itDel, 1); if (!list.length) list.push({name: '', amount: '', people: [...ids0]}); drawItems(); }
+    else if (t.dataset.itP != null) {
+      const it = list[+t.dataset.itP], id = t.dataset.pid;
+      it.people = it.people.includes(id) ? it.people.filter(x => x !== id) : [...it.people, id];
+      t.setAttribute('aria-pressed', it.people.includes(id)); update();
+    }
+  });
   const draw = () => {
+    if (st.mode === 'items') return drawItems();
     const inp = st.inputs[st.mode] || {};
     if (st.mode === 'shares') ids.forEach(id => { if (inp[id] == null) inp[id] = '1'; });
     rowsEl.innerHTML = people.map(p => {
@@ -48,16 +76,19 @@ function splitEditor({modeEl, rowsEl, hintEl, people, mode, inc, inputs, getTota
     const t = ev.target;
     if (t.dataset.inc) { t.checked ? st.inc.add(t.dataset.inc) : st.inc.delete(t.dataset.inc); }
     if (t.dataset.in) (st.inputs[st.mode] ||= {})[t.dataset.in] = t.value;
+    if (t.dataset.itName != null) st.inputs.items.list[+t.dataset.itName].name = t.value;
+    if (t.dataset.itAmt != null) st.inputs.items.list[+t.dataset.itAmt].amount = t.value;
     update();
   });
   draw();
-  return {update, draw, get mode(){ return st.mode; }, get input(){ return st.mode === 'equal' ? {} : {...(st.inputs[st.mode] || {})}; }};
+  return {update, draw, get mode(){ return st.mode; }, get inc(){ return [...st.inc]; },
+    get input(){ return st.mode === 'equal' ? {} : JSON.parse(JSON.stringify(st.inputs[st.mode] || {})); }};
 }
 
 /* ---------- add / edit an expense in a group or friend ledger ---------- */
 // Full-screen, phone-app style: description and amount up top, a "Paid by you and split equally"
 // button that opens the details, and a toolbar for date, repeat, receipt and notes.
-const MODE_WORDS = {equal: 'equally', exact: 'by exact amounts', percent: 'by percentages', shares: 'by shares', adjust: 'with adjustments'};
+const MODE_WORDS = {equal: 'equally', exact: 'by exact amounts', percent: 'by percentages', shares: 'by shares', adjust: 'with adjustments', items: 'by items'};
 const dayLabel = d => d === today() ? 'Today' : new Date(d + 'T00:00').toLocaleDateString(undefined, {day: 'numeric', month: 'short'});
 const sheetBar = (title, save = 'Save') => `<div class="sheet-bar"><button type="button" class="btn ghost icon-btn" data-close aria-label="Close">${icon('x', 22)}</button>
   <b>${title}</b>${save ? `<button class="btn ghost bar-save" type="submit">${save}</button>` : '<span></span>'}</div>`;
@@ -67,7 +98,9 @@ export function openExpenseSheet(gid, eid){
   const multiPay = e?.payers && Object.keys(e.payers).length > 1;
   const payer = e?.paid_by || myId(gid) || members[0].id;
   const cur0 = e ? curOf(e, g) : g.currency;
-  const mode0 = e?.split_mode || 'equal';
+  // A new expense starts with the group's saved default split, if it has one.
+  const ds = !e && g.default_split?.mode ? g.default_split : null;
+  const mode0 = e?.split_mode || ds?.mode || 'equal';
   const cat0 = e?.category || 'general';
   let catTouched = !!e;
   const withChip = g.is_direct ? `${avatar(titleOf(g), avatarUrl(friendOf(g.id)), 'av tiny')} ${esc(titleOf(g))}` : `${icon(GROUP_TYPES.find(t => t[0] === g.type)?.[2] || 'users', 15)} All of ${esc(g.name)}`;
@@ -78,6 +111,7 @@ export function openExpenseSheet(gid, eid){
         <input id="eDesc" class="line-input" maxlength="80" placeholder="Enter a description" value="${esc(e?.description || '')}" ${e ? '' : 'autofocus'}></div>
       <div class="bf"><label class="sq-btn cur" title="Currency"><span id="curSym">${esc(curSymbol(cur0))}</span><select id="eCur" aria-label="Currency">${currencyOptions(cur0)}</select></label>
         <input id="eAmt" class="line-input amount" inputmode="decimal" placeholder="0.00" value="${e ? fromMinor(Number(e.amount), cur0) : ''}"></div>
+      <div class="muted small" id="convLine" hidden></div>
       <button type="button" class="pill" id="splitPill"></button>
       <div class="per-person muted small" id="perPerson"></div>
     </div>
@@ -87,6 +121,7 @@ export function openExpenseSheet(gid, eid){
       <div id="payBox" ${multiPay ? '' : 'hidden'}><div class="f-l">How much each person paid</div><div class="split-rows" id="payRows"></div><p class="hint" id="payHint"></p></div>
       <div><div class="f-l">Split</div><div class="seg" id="eMode"></div></div>
       <div class="split-rows" id="eRows"></div>
+      <label class="switch small"><input type="checkbox" id="eDefault" ${ds ? 'checked' : ''}><span>Use this split for new expenses ${g.is_direct ? `with ${esc(titleOf(g))}` : `in ${esc(g.name)}`}</span></label>
       <button type="button" class="btn sm" id="splitDone" style="align-self:flex-end">Done</button>
     </div>
     <p class="hint" id="eHint"></p>
@@ -105,8 +140,10 @@ export function openExpenseSheet(gid, eid){
   const total = () => toMinor($('#eAmt').value, cur());
   const editor = splitEditor({
     modeEl: $('#eMode'), rowsEl: $('#eRows'), hintEl: $('#eHint'), people, mode: mode0,
-    inc: new Set(e && (mode0 === 'equal' || mode0 === 'adjust') ? Object.keys(e.split) : members.map(m => m.id)),
-    inputs: e && mode0 !== 'equal' ? {[mode0]: {...(e.split_input || {})}} : {}, getTotal: total, getCur: cur,
+    inc: new Set(e && (mode0 === 'equal' || mode0 === 'adjust') ? Object.keys(e.split)
+      : ds?.inc?.length ? ds.inc.filter(id => members.some(m => m.id === id)) : members.map(m => m.id)),
+    inputs: e && mode0 !== 'equal' ? {[mode0]: JSON.parse(JSON.stringify(e.split_input || {}))} : ds && ds.mode !== 'equal' ? {[ds.mode]: JSON.parse(JSON.stringify(ds.input || {}))} : {},
+    getTotal: total, getCur: cur,
   });
   // Several payers
   const payInputs = multiPay ? Object.fromEntries(Object.entries(e.payers).map(([k, v]) => [k, fromMinor(Number(v), cur0)])) : {};
@@ -126,32 +163,51 @@ export function openExpenseSheet(gid, eid){
     const pv = $('#ePaid').value, who = pv === '__multi' ? 'several people' : pv === myId(gid) ? 'you' : nameOf(gid, pv);
     $('#splitPill').innerHTML = `Paid by <b>${esc(who)}</b> and split <b>${MODE_WORDS[editor.mode]}</b>`;
     const r = editor.update(), n = r.split ? Object.keys(r.split).length : 0;
-    $('#perPerson').textContent = editor.mode === 'equal' && n && total() > 0 ? `(${fmt(Math.floor(total() / n), cur())}/person)` : '';
+    $('#perPerson').textContent = editor.mode === 'equal' && n && total() > 0 ? `(${fmt(Math.floor(total() / n), cur())}/person)`
+      : editor.mode === 'items' && r.total && !(total() > 0) ? `(${fmt(r.total, cur())} from the items)` : '';
+    $('#eDefault').disabled = editor.mode === 'items';
   };
   const setCat = k => { $('#catBtn').querySelector('.ico')?.replaceWith(document.createRange().createContextualFragment(catIcon(k))); };
   payRows.addEventListener('input', ev => { if (ev.target.dataset.pay) { payInputs[ev.target.dataset.pay] = ev.target.value; updatePay(); } });
   $('#ePaid').addEventListener('change', () => { $('#payBox').hidden = $('#ePaid').value !== '__multi'; drawPay(); pill(); });
-  $('#eAmt').addEventListener('input', () => { pill(); updatePay(); });
-  $('#eCur').addEventListener('change', () => { $('#curSym').textContent = curSymbol(cur()); editor.draw(); drawPay(); pill(); });
+  // An expense in another currency: show it in the group's currency, with a button to convert it.
+  const conv = () => {
+    const box = $('#convLine'), c = cur(), t = total();
+    const x = c !== g.currency && t > 0 ? toCurrency(t, c, g.currency) : null;
+    box.hidden = x == null;
+    if (x != null) box.innerHTML = `≈ ${fmt(x, g.currency)} at today’s rate · <button type="button" class="linkbtn small" id="convBtn">Convert to ${esc(g.currency)}</button>`;
+  };
+  $('#convLine').addEventListener('click', ev => {
+    if (ev.target.id !== 'convBtn') return;
+    const x = toCurrency(total(), cur(), g.currency); if (x == null) return;
+    $('#eCur').value = g.currency; $('#eAmt').value = fromMinor(x, g.currency);
+    $('#curSym').textContent = curSymbol(g.currency); editor.draw(); drawPay(); pill(); conv();
+    toast(`Converted to ${g.currency} using ${rates()?.source || 'today’s'} rates`);
+  });
+  $('#eAmt').addEventListener('input', () => { pill(); updatePay(); conv(); });
+  $('#eCur').addEventListener('change', () => { $('#curSym').textContent = curSymbol(cur()); editor.draw(); drawPay(); pill(); conv(); });
   $('#eMode').addEventListener('click', () => setTimeout(pill));
   $('#eRows').addEventListener('input', () => setTimeout(pill));
   $('#eCat').addEventListener('change', () => { catTouched = true; setCat($('#eCat').value); });
   $('#eDesc').addEventListener('input', () => { if (catTouched) return; const k = guessCategory($('#eDesc').value); if (k) { $('#eCat').value = k; setCat(k); } });
   $('#splitPill').addEventListener('click', () => { $('#splitPanel').hidden = !$('#splitPanel').hidden; });
+  $('#eDefault').addEventListener('change', ev => { ev.target.dataset.touched = '1'; });
   $('#splitDone').addEventListener('click', () => { $('#splitPanel').hidden = true; });
   $('#notesBtn').addEventListener('click', () => { $('#notesBox').hidden = false; $('#eNotes').focus(); });
   $('#eDate').addEventListener('change', () => { $('#dateLbl').textContent = dayLabel($('#eDate').value || today()); });
   $('#eRep').addEventListener('change', () => { const v = $('#eRep').value; $('#repLbl').textContent = v === 'never' ? 'Once' : REPEATS.find(r => r[0] === v)[1]; });
-  drawPay(); pill();
+  drawPay(); pill(); conv();
   const receipt = {file: null, removed: false};
   $('#eReceipt').addEventListener('change', ev => { receipt.file = ev.target.files[0] || null; if (receipt.file) $('#rName').innerHTML = `${icon('paperclip', 13)} ${esc(receipt.file.name)}`; });
   $('#eReceiptRm')?.addEventListener('click', () => { receipt.removed = true; receipt.file = null; $('#rName').textContent = 'The receipt will be removed when you save.'; });
-  if (e) armDelete($('#eDel'), async () => { if (await run(sb.from('expenses').delete().eq('id', e.id), 'Expense deleted. You can restore it from Activity.')) closeSheet(); });
+  if (e) armDelete($('#eDel'), async () => { if (await save('expenses', 'delete', null, e.id, 'Expense deleted. You can restore it from Activity.')) closeSheet(); });
   $('#eForm').addEventListener('submit', async ev => {
     ev.preventDefault();
     const hint = $('#eHint');
     const description = $('#eDesc').value.trim();
     if (!description) { hint.className = 'hint err'; hint.textContent = 'Enter a description.'; $('#eDesc').focus(); return; }
+    // Split by items with no total typed: the items' sum is the total.
+    if (!(total() > 0) && editor.mode === 'items') { const r0 = editor.update(); if (r0.total) $('#eAmt').value = fromMinor(r0.total, cur()); }
     if (!(total() > 0)) { hint.className = 'hint err'; hint.textContent = 'Enter an amount above zero.'; $('#eAmt').focus(); return; }
     const r = editor.update(); if (r.error) { $('#splitPanel').hidden = false; return; }
     const p = updatePay(); if (p.error) { $('#splitPanel').hidden = false; return; }
@@ -166,8 +222,14 @@ export function openExpenseSheet(gid, eid){
       try { row.receipt_path = await uploadReceipt(g.id, id, receipt.file); }
       catch (err) { busy(ev.target, false); toast(friendly(err)); return; }
     } else if (receipt.removed) row.receipt_path = null;
-    const ok = await run(e ? sb.from('expenses').update(row).eq('id', e.id) : sb.from('expenses').insert({...row, id}), e ? 'Expense updated' : 'Expense added');
+    const ok = await save('expenses', e ? 'update' : 'insert', e ? row : {...row, id}, id, e ? 'Expense updated' : 'Expense added');
     if (ok && e?.receipt_path && (receipt.file || receipt.removed)) sb.storage.from('receipts').remove([e.receipt_path]);
+    // Remember (or forget) this split as the group's default.
+    const wantDefault = $('#eDefault').checked && editor.mode !== 'items';
+    if (ok && wantDefault) {
+      const def = {mode: editor.mode, input: editor.input, inc: editor.inc};
+      if (JSON.stringify(def) !== JSON.stringify(g.default_split)) run(sb.from('groups').update({default_split: def}).eq('id', g.id));
+    } else if (ok && !wantDefault && g.default_split && $('#eDefault').dataset.touched) run(sb.from('groups').update({default_split: null}).eq('id', g.id));
     busy(ev.target, false);
     if (ok) closeSheet();
   });
@@ -357,7 +419,7 @@ export async function openExpenseDetail(eid){
     <form id="cForm" class="inline-form comment-box"><label class="f" style="flex:1"><span class="sr">Add a comment</span><input id="cBody" maxlength="1000" placeholder="Add a comment"></label><button class="btn primary" type="submit">${icon('send', 15)}<span class="sr">Post</span></button></form>
   </div>`, {full: true});
   $('#dEdit').addEventListener('click', () => isPay ? openSettleSheet(g.id, {id: e.id}) : openExpenseSheet(g.id, e.id));
-  armDelete($('#dDel'), async () => { if (await run(sb.from('expenses').delete().eq('id', e.id), 'Deleted. You can restore it from Activity.')) closeSheet(); }, 'Tap again');
+  armDelete($('#dDel'), async () => { if (await save('expenses', 'delete', null, e.id, 'Deleted. You can restore it from Activity.')) closeSheet(); }, 'Tap again');
   // Comments and every change to the expense, in one thread, oldest first.
   const loadComments = async () => {
     const [c, h] = await Promise.all([
@@ -390,7 +452,8 @@ export async function openExpenseDetail(eid){
     ev.preventDefault();
     const body = $('#cBody').value.trim(); if (!body) return;
     busy(ev.target, true);
-    const ok = await run(sb.from('comments').insert({expense_id: e.id, group_id: g.id, body}));
+    const cid = crypto.randomUUID();
+    const ok = await save('comments', 'insert', {id: cid, expense_id: e.id, group_id: g.id, body}, cid);
     busy(ev.target, false);
     if (ok) { $('#cBody').value = ''; loadComments(); }
   });
@@ -451,7 +514,7 @@ export function openSettleSheet(gid, pre = {}){
   $('#pChange').addEventListener('click', () => { $('#pPeople').hidden = !$('#pPeople').hidden; });
   $('#pDate').addEventListener('change', () => { $('#pDateLbl').textContent = dayLabel($('#pDate').value || today()); });
   $('#pCur').addEventListener('change', () => { $('#pSym').textContent = curSymbol($('#pCur').value); });
-  if (p) armDelete($('#pDel'), async () => { if (await run(sb.from('expenses').delete().eq('id', p.id), 'Payment deleted')) closeSheet(); });
+  if (p) armDelete($('#pDel'), async () => { if (await save('expenses', 'delete', null, p.id, 'Payment deleted')) closeSheet(); });
   const links = () => {
     hero();
     const box = $('#payLinks'); if (!box) return;
@@ -476,7 +539,8 @@ export function openSettleSheet(gid, pre = {}){
     const row = {group_id: g.id, kind: 'payment', description: 'Payment', amount: a, paid_by: f, payers: null, split: {[t]: a},
       split_mode: 'exact', split_input: {}, category: 'general', currency: c, date: $('#pDate').value || today()};
     busy(ev.target, true);
-    const ok = await run(p ? sb.from('expenses').update(row).eq('id', p.id) : sb.from('expenses').insert(row), `Payment of ${fmt(a, c)} recorded`);
+    const pid = p ? p.id : crypto.randomUUID();
+    const ok = await save('expenses', p ? 'update' : 'insert', p ? row : {...row, id: pid}, pid, `Payment of ${fmt(a, c)} recorded`);
     busy(ev.target, false);
     if (ok) closeSheet();
   });
@@ -563,6 +627,8 @@ export function openGroupSheet(gid){
         <label class="btn sm">${icon('image', 15)} ${g.cover_url ? 'Change' : 'Add photo'}<input type="file" id="gCover" accept="image/*" hidden></label>
         ${g.cover_url ? `<button type="button" class="btn sm ghost" id="gCoverRm">Remove</button>` : ''}</div></div>
       <button type="button" class="btn" id="gInvite">${icon('qr-code', 16)} Invite link and QR code</button>` : ''}
+    ${g?.default_split?.mode ? `<div class="spread wrapflex"><span><b>Default split</b><br><span class="muted small">New expenses start split ${MODE_WORDS[g.default_split.mode] || 'equally'}${defaultSummary(g)}.</span></span>
+      <button type="button" class="btn sm ghost" id="gDefClear">Clear</button></div>` : ''}
     <div><div class="f-l">People</div><div class="split-rows" id="gMembers"></div></div>
     <label class="f">Add people<input id="gFind" placeholder="Type a name or email" autocomplete="off"></label>
     <div class="list" id="gResults"></div>
@@ -598,6 +664,7 @@ export function openGroupSheet(gid){
     inviteLabel: q => `Add “${esc(q)}” and invite them later`,
     onPick: m => { F.added.push(m); hint.textContent = ''; draw(); $('#gFind').focus(); }});
   if (g) {
+    $('#gDefClear')?.addEventListener('click', async () => { if (await run(sb.from('groups').update({default_split: null}).eq('id', g.id), 'Default split cleared')) closeSheet(); });
     $('#gInvite').addEventListener('click', () => openInviteSheet(g.id));
     $('#gCover').addEventListener('change', async ev => {
       const file = ev.target.files[0]; if (!file) return;
@@ -840,4 +907,62 @@ export function openFilterSheet(){
   const b = openSheet(`<div class="sheet-in">${head('Show')}<div class="list">${opts.map(([k, l]) => `<button class="row" data-f="${k}">
     <span class="main"><span class="title">${l}</span></span>${S.filter === k ? `<span class="pos">${icon('check', 18)}</span>` : ''}</button>`).join('')}</div></div>`);
   b.querySelectorAll('[data-f]').forEach(x => x.addEventListener('click', () => { S.filter = x.dataset.f; closeSheet(); emit(); }));
+}
+
+function defaultSummary(g){
+  const d = g.default_split, ids = memberIdsOf(g.id);
+  if (!d || d.mode === 'equal') return d?.inc?.length && d.inc.length < ids.length ? ` among ${d.inc.map(id => nameOf(g.id, id)).join(', ')}` : '';
+  const vals = Object.entries(d.input || {}).filter(([id, v]) => ids.includes(id) && String(v).trim() !== '');
+  const unit = d.mode === 'percent' ? '%' : d.mode === 'shares' ? ' shares' : '';
+  return vals.length ? `: ${vals.map(([id, v]) => `${nameOf(g.id, id)} ${v}${unit}`).join(', ')}` : '';
+}
+const memberIdsOf = gid => membersOf(gid).map(m => m.id);
+
+/* ---------- monthly budgets ---------- */
+export function openBudgetSheet(key){
+  const cg = CATEGORY_GROUPS.find(c => c.key === key), cur = defaultCurrency();
+  const budgets = {...(S.profiles[uid()]?.budgets || {})}, now = budgets[key];
+  openSheet(`<form class="sheet-in" id="bForm" novalidate>${head(`${esc(cg.label)} budget`)}
+    <p class="muted small" style="margin:0">A monthly limit for your share of ${esc(cg.label.toLowerCase())}, across all your groups and friends.</p>
+    <div class="bf" style="width:100%"><span class="sq-btn cur"><span>${esc(curSymbol(cur))}</span></span>
+      <input id="bAmt" class="line-input amount" inputmode="decimal" placeholder="0" value="${now ? fromMinor(Number(now), cur) : ''}" autofocus></div>
+    <p class="hint err" id="bHint"></p>
+    <div class="actions">${now ? `<button type="button" class="btn ghost" id="bClear">Remove budget</button>` : ''}<span class="sp"></span><button class="btn primary" type="submit">Save</button></div>
+  </form>`);
+  const store = async next => { if (await run(sb.from('profiles').upsert({id: uid(), name: myName(), budgets: next}, {onConflict: 'id'}), 'Budget saved')) closeSheet(); };
+  $('#bClear')?.addEventListener('click', () => { delete budgets[key]; store(budgets); });
+  $('#bForm').addEventListener('submit', ev => {
+    ev.preventDefault();
+    const v = toMinor($('#bAmt').value, cur);
+    if (!(v > 0)) { $('#bHint').textContent = 'Enter a monthly amount above zero.'; return; }
+    store({...budgets, [key]: v});
+  });
+}
+
+/* ---------- export and backup ---------- */
+const csvCell = v => { const t = String(v ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+// One row per expense or payment; one column per person with what they paid minus their share.
+export function exportGroupCsv(gid){
+  const g = S.groups[gid], ms = membersOf(gid);
+  const head = ['Date', 'Description', 'Category', 'Cost', 'Currency', ...ms.map(m => personName(m))];
+  const totals = {};
+  const lines = expOf(gid).slice().reverse().map(e => {
+    const c = curOf(e, g), d = 10 ** (fromMinor(1, c).split('.')[1]?.length || 0);
+    const payers = payersOf(e);
+    const per = ms.map(m => { const v = Number(payers[m.id] || 0) - Number(e.split?.[m.id] || 0); (totals[c] ||= {})[m.id] = ((totals[c] ||= {})[m.id] || 0) + v; return (v / d).toFixed(fromMinor(1, c).split('.')[1]?.length || 0); });
+    return [e.date, e.kind === 'payment' ? `${nameOf(gid, e.paid_by)} paid ${nameOf(gid, Object.keys(e.split)[0])}` : e.description,
+      e.kind === 'payment' ? 'Payment' : catOf(e.category).label, fromMinor(Number(e.amount), c), c, ...per];
+  });
+  for (const [c, t] of Object.entries(totals)) lines.push(['', 'Total balance', '', '', c, ...ms.map(m => fromMinor(t[m.id] || 0, c))]);
+  const text = [head, ...lines].map(r => r.map(csvCell).join(',')).join('\n');
+  const name = `${(g.is_direct ? `evenly-${titleOf(g)}` : g.name).replace(/[^\w-]+/g, '-').replace(/-+/g, '-').toLowerCase()}-${today()}.csv`;
+  downloadFile(name, '﻿' + text, 'text/csv');
+}
+export async function downloadBackup(){
+  toast('Preparing your backup…');
+  const {data: comments} = await sb.from('comments').select('*').limit(10000);
+  const backup = {app: 'Evenly', exported_at: new Date().toISOString(), you: {id: uid(), email: S.session.user.email, profile: S.profiles[uid()] || null},
+    groups: Object.values(S.groups), members: Object.values(S.members).flat(), expenses: Object.values(S.expenses).map(({pending, ...e}) => e),
+    comments: comments || [], people: Object.values(S.profiles).map(p => ({id: p.id, name: p.name}))};
+  downloadFile(`evenly-backup-${today()}.json`, JSON.stringify(backup, null, 2), 'application/json');
 }

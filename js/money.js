@@ -90,6 +90,7 @@ export const addMaps = (a, b) => { const o = {...a}; for (const [k, v] of Object
 // inputs: per-person values typed into the form (exact amounts, %, shares or +/- adjustments).
 // toMinor: parses a typed amount in this expense's currency.
 export function computeSplit(total, mode, ids, inc, inputs, cur, toMinor){
+  if (mode === 'items') return computeItems(total, ids, inputs, cur, toMinor);
   if (!(total > 0)) return {error: 'Enter an amount above zero.'};
   if (mode === 'equal' || mode === 'adjust') {
     const sel = ids.filter(id => inc.has(id));
@@ -154,4 +155,34 @@ export function computePayers(total, ids, inputs, cur, toMinor){
   if (!Object.keys(payers).length) return {error: 'Enter how much each person paid.'};
   if (sum !== total) return {error: sum < total ? `Payments are ${fmt(total - sum, cur)} short of the total` : `Payments are ${fmt(sum - total, cur)} over the total`};
   return {payers};
+}
+
+// Split by items: each item is shared equally by the people who had it. Whatever the bill adds on top
+// of the items (tax, tip, service) is shared in proportion to each person's items.
+// input: {list: [{name, amount: "600", people: [ids]}]}. With no total entered, the items' sum is the total.
+export function computeItems(total, ids, input, cur, toMinor){
+  const list = (input?.list || []).filter(it => String(it.amount ?? '').trim() !== '' || (it.name || '').trim());
+  if (!list.length) return {error: 'Add the items on the bill.'};
+  const base = {}; let sub = 0;
+  for (const it of list) {
+    const amt = toMinor(it.amount);
+    if (isNaN(amt) || amt <= 0) return {error: `Enter a price for ${it.name ? `“${it.name}”` : 'each item'}.`};
+    const who = (it.people || []).filter(id => ids.includes(id));
+    if (!who.length) return {error: `Choose who had ${it.name ? `“${it.name}”` : 'each item'}.`};
+    for (const [id, v] of Object.entries(allocate(amt, Object.fromEntries(who.map(id => [id, 1]))))) base[id] = (base[id] || 0) + v;
+    sub += amt;
+  }
+  const t = total > 0 ? total : sub;
+  if (sub > t) return {error: `Items add up to ${fmt(sub, cur)}, more than the total of ${fmt(t, cur)}.`};
+  const extra = t - sub, split = {...base};
+  for (const [id, v] of Object.entries(allocate(extra, base))) split[id] = (split[id] || 0) + v;
+  return {split, total: t, msg: extra > 0 ? `Items ${fmt(sub, cur)} + ${fmt(extra, cur)} tax, tip and charges, shared in proportion` : `Items add up to ${fmt(t, cur)}`};
+}
+
+// Converts an amount between currencies with rates relative to one base: rates[c] = units of c per 1 base.
+export function convert(minor, from, to, rates, digitsOf){
+  if (from === to) return minor;
+  const rf = rates?.[from], rt = rates?.[to];
+  if (!rf || !rt) return null;
+  return Math.round(minor / 10 ** digitsOf(from) / rf * rt * 10 ** digitsOf(to));
 }

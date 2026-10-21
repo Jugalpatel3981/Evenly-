@@ -9,6 +9,8 @@ import { catOf, CATEGORY_GROUPS, typeOf } from './categories.js';
 import { icon } from './icons.js';
 import { avatar, catIcon, payIcon, balanceLines, currencyOptions } from './ui.js';
 import { noteText, noteIcon } from './messages.js';
+import { sumIn, rates, toCurrency } from './rates.js';
+import { outbox } from './state.js';
 
 // nameOf() gives "You"; in the middle of a sentence it should read "you".
 const nm = (gid, id) => { const n = nameOf(gid, id); return n === 'You' ? 'you' : n; };
@@ -73,11 +75,19 @@ export function renderApp(){
     else if (f.ledger) Object.assign(S, {view: 'group', gid: f.ledger, tab: 'expenses'});
   }
   document.body.classList.toggle('with-tabbar', S.view === 'home');
-  if (S.view === 'group') return renderGroup(S.groups[S.gid]);
-  if (S.view === 'friend') return renderFriendOnly(friendsIndex().get(S.fkey));
+  const off = offlineBar();
+  if (S.view === 'group') return off + renderGroup(S.groups[S.gid]);
+  if (S.view === 'friend') return off + renderFriendOnly(friendsIndex().get(S.fkey));
+  if (S.view === 'spending') return off + renderSpending();
   const t = S.homeTab;
   const body = t === 'groups' ? renderGroupsTab() : t === 'activity' ? renderActivityTab() : t === 'account' ? renderSettings() : renderFriendsTab();
-  return body + (t === 'account' ? '' : fab('pick-exp')) + tabBar();
+  return off + body + (t === 'account' ? '' : fab('pick-exp')) + tabBar();
+}
+function offlineBar(){
+  const n = outbox().length;
+  if (!S.offline && navigator.onLine && !n) return '';
+  return `<div class="offline-bar">${icon('refresh-cw', 15)}<span>${S.offline || !navigator.onLine ? 'You’re offline. Showing your last saved balances.' : 'Syncing…'}
+    ${n ? ` ${n} change${n > 1 ? 's' : ''} will sync when you’re back online.` : ''}</span></div>`;
 }
 
 /* ---------- balances shown as one-liners ---------- */
@@ -96,8 +106,17 @@ function totalCard(){
     <div class="tc-text"><div class="tc-lbl">Total balance</div>
       ${Object.keys(owe).length ? `<div class="neg">You owe ${fmtMulti(owe)}</div>` : ''}
       ${Object.keys(owed).length ? `<div class="pos">You are owed ${fmtMulti(owed)}</div>` : ''}
-      ${any ? '' : `<div class="muted">You’re all settled up</div>`}</div>
+      ${any ? '' : `<div class="muted">You’re all settled up</div>`}${overallLine(owed, owe)}</div>
     <button class="btn ghost icon-btn tc-filter${S.filter && S.filter !== 'all' ? ' on' : ''}" data-act="filter" aria-label="Filter: ${filt[1]}">${icon('sliders-horizontal', 20)}</button></div>`;
+}
+// With balances in more than one currency, also show the overall total in your default currency.
+function overallLine(owed, owe){
+  const curs = new Set([...Object.keys(owed), ...Object.keys(owe)]), mine = myProfile()?.default_currency || 'INR';
+  if (!curs.size || (curs.size === 1 && curs.has(mine))) return '';
+  const a = sumIn(owed, mine), b = sumIn(owe, mine);
+  if (a == null || b == null) return '';
+  const net = a - b;
+  return `<div class="tc-overall small">${net >= 0 ? 'Overall you are owed' : 'Overall you owe'} ≈ <b>${fmt(net, mine)}</b> <span class="muted">· ${esc(rates()?.source || '')} rates</span></div>`;
 }
 export const FILTERS = [['all', 'All'], ['outstanding', 'Outstanding balances'], ['owe', 'People you owe'], ['owed', 'People who owe you']];
 const passes = map => {
@@ -290,6 +309,7 @@ function renderGroup(g){
   chips.push(chip('tab', 'Totals', {on: S.tab === 'insights', attrs: 'data-tab="insights"'}));
   if (!g.is_direct) chips.push(chip('tab', 'Whiteboard', {on: S.tab === 'board', attrs: 'data-tab="board"'}));
   if (!g.is_direct || (f && !f.user_id)) chips.push(chip('invite', `${icon('share-2', 14)} Invite`, {attrs: `data-id="${esc(g.id)}"`}));
+  if (hasExp) chips.push(chip('export', `${icon('copy', 14)} Export`, {attrs: `data-id="${esc(g.id)}"`}));
   const big = g.is_direct ? avatar(personName(f), avatarUrl(f), 'av hero') : groupAvatar(g, 'gav hero');
   let html = `${banner(g.is_direct ? null : g, g.is_direct ? 'friends' : 'groups', g.is_direct ? 'edit-friend' : 'edit-group')}
     <div class="page-head">${big}<h1>${esc(titleOf(g))}</h1>
@@ -341,7 +361,8 @@ export function expenseRow(g, e, me){
   const sub = e.kind === 'payment' ? 'Payment' : paidLabel(g, e);
   const badges = (e.repeat !== 'never' && e.repeat ? `<span class="badge">${icon('repeat', 12)} ${e.repeat}</span>` : '')
     + (e.receipt_path ? `<span class="badge">${icon('paperclip', 12)}</span>` : '')
-    + (e.notes ? `<span class="badge">${icon('notebook-pen', 12)}</span>` : '');
+    + (e.notes ? `<span class="badge">${icon('notebook-pen', 12)}</span>` : '')
+    + (e.pending ? `<span class="badge warn">${icon('refresh-cw', 12)} waiting to sync</span>` : '');
   return `<button class="row erow" data-act="open-exp" data-id="${esc(e.id)}">${dt}${e.kind === 'payment' ? payIcon() : catIcon(e.category)}
     <span class="main"><span class="title">${title}</span><span class="sub">${sub} ${badges}</span></span>
     <span class="amt">${myPart(g, e, me)}</span></button>`;
@@ -412,9 +433,25 @@ function renderInsights(g){
         <div class="stat"><div class="lbl">Total ${g.is_direct ? 'spent together' : 'group spending'}</div><div class="val">${fmt(total, cur)}</div></div>
         ${me ? `<div class="stat"><div class="lbl">Total you paid for</div><div class="val">${fmt(myPaid, cur)}</div></div>
         <div class="stat"><div class="lbl">Your total share</div><div class="val">${fmt(myShare, cur)}</div></div>` : ''}</div>
+      <div class="section"><h3>Month by month</h3>${monthBars(list, cur, e => Number(e.amount), me ? e => Number(e.split?.[me] || 0) : null)}</div>
       <div class="section"><h3>Spending by category</h3><div class="list">${catRows}</div></div>
       <div class="section"><h3>Paid versus share</h3><div class="list">${pRows}</div></div>`;
   }).join('');
+}
+// Last six months as bars: the total, and optionally your share inside it.
+function lastMonths(n = 6, end = new Date()){
+  return Array.from({length: n}, (_, i) => { const d = new Date(end.getFullYear(), end.getMonth() - (n - 1 - i), 1);
+    return {key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, label: d.toLocaleDateString(undefined, {month: 'short'})}; });
+}
+function monthBars(list, cur, total, mine){
+  const months = lastMonths().map(m => ({...m, t: 0, m: 0}));
+  list.forEach(e => { const mm = months.find(x => x.key === String(e.date).slice(0, 7)); if (mm) { mm.t += total(e); if (mine) mm.m += mine(e); } });
+  const max = Math.max(1, ...months.map(m => m.t));
+  return `<div class="bars" role="img" aria-label="Spending per month">${months.map(m => `<div class="bar-col" title="${esc(m.label)}: ${fmt(m.t, cur)}">
+      <span class="bar-v small">${m.t ? fmt(m.t, cur).replace(/\.00$/, '') : ''}</span>
+      <span class="bar-track"><i style="height:${(m.t / max * 100).toFixed(1)}%">${mine && m.t ? `<em style="height:${(m.m / m.t * 100).toFixed(1)}%"></em>` : ''}</i></span>
+      <span class="bar-l small">${esc(m.label)}</span></div>`).join('')}</div>
+    ${mine ? `<div class="legend small"><span class="key total"></span> Everyone <span class="key mine"></span> Your share</div>` : ''}`;
 }
 function renderBoard(g){
   const by = g.whiteboard_by ? (g.whiteboard_by === uid() ? 'you' : (membersOf(g.id).find(m => m.user_id === g.whiteboard_by)?.name || 'someone')) : null;
@@ -464,6 +501,14 @@ function renderSettings(){
   <section class="card-sec"><h3>${icon('key-round', 15)} Password</h3>
     <form id="passForm" class="inline-form"><label class="f">New password<input id="sPass" type="password" autocomplete="new-password" placeholder="At least 6 characters"></label><button class="btn" type="submit">Change</button></form>
   </section>
+  <section class="card-sec"><h3>${icon('chart-column', 15)} Spending and budgets</h3>
+    <p class="muted small" style="margin:0">Your share of everything this month, by category, with optional monthly budgets.</p>
+    <button class="btn" data-act="spending">${icon('trending-up', 16)} See your spending</button>
+  </section>
+  <section class="card-sec"><h3>${icon('history', 15)} Your data</h3>
+    <p class="muted small" style="margin:0">Download everything you can see in Evenly as one file, to keep as a backup. Each group can also be exported as a spreadsheet from its page.</p>
+    <button class="btn" data-act="backup">${icon('copy', 16)} Download a backup</button>
+  </section>
   <section class="card-sec"><h3>${icon('share-2', 15)} Invite friends to Evenly</h3>
     <div class="actions"><code class="grow">${esc(location.origin)}</code><button class="btn sm" data-act="copy-app">${icon('copy', 15)} Copy link</button></div>
   </section>
@@ -503,4 +548,58 @@ function pushBanner(){
     return `<div class="banner ok push-banner">${icon('smartphone', 18)}<span>To get notifications on iPhone, tap <b>Share</b> then <b>Add to Home Screen</b>, and open Evenly from your Home Screen.</span>
       <span class="actions nowrap"><button class="btn sm ghost" data-act="push-later">OK</button></span></div>`;
   return '';
+}
+
+/* ---------- your spending and budgets ---------- */
+// Your share of every expense in a month, in your default currency, by category group.
+export function spendingByMonth(n = 6){
+  const mine = myProfile()?.default_currency || 'INR';
+  const months = lastMonths(n, monthDate()).map(m => ({...m, total: 0, byParent: {}}));
+  let skipped = 0;
+  for (const g of Object.values(S.groups)) {
+    const me = myId(g.id); if (!me) continue;
+    for (const e of expOf(g.id)) {
+      if (e.kind === 'payment') continue;
+      const mm = months.find(x => x.key === String(e.date).slice(0, 7)); if (!mm) continue;
+      const share = Number(e.split?.[me] || 0); if (!share) continue;
+      const v = toCurrency(share, curOf(e, g), mine);
+      if (v == null) { skipped++; continue; }
+      const parent = catOf(e.category).parent;
+      mm.total += v; mm.byParent[parent] = (mm.byParent[parent] || 0) + v;
+    }
+  }
+  return {months, cur: mine, skipped};
+}
+const monthDate = () => { const [y, m] = (S.spendMonth || '').split('-').map(Number); return y ? new Date(y, m - 1, 1) : new Date(); };
+function renderSpending(){
+  const {months, cur, skipped} = spendingByMonth();
+  const now = months[months.length - 1], prev = months[months.length - 2];
+  const budgets = myProfile()?.budgets || {};
+  const thisMonth = new Date().toISOString().slice(0, 7) === now.key;
+  const delta = prev.total ? Math.round((now.total - prev.total) / prev.total * 100) : null;
+  const rows = CATEGORY_GROUPS.map(cg => {
+    const v = now.byParent[cg.key] || 0, b = Number(budgets[cg.key] || 0);
+    if (!v && !b) return '';
+    const pct = b ? v / b * 100 : 0, over = b && v > b, near = b && pct >= 80 && !over;
+    return `<button class="row" data-act="budget" data-key="${cg.key}" style="--c:var(--c-${cg.color})"><span class="ico">${icon(cg.items[0][2])}</span>
+      <span class="main"><span class="spread"><b>${esc(cg.label)}</b><span class="num">${fmt(v, cur)}${b ? ` <span class="muted">of ${fmt(b, cur)}</span>` : ''}</span></span>
+      ${b ? `<span class="bar budget${over ? ' over' : near ? ' near' : ''}"><i style="width:${Math.min(100, pct).toFixed(1)}%"></i></span>
+        <span class="sub">${over ? `<span class="neg">${fmt(v - b, cur)} over budget</span>` : `${fmt(b - v, cur)} left`}</span>` : `<span class="sub">Tap to set a monthly budget</span>`}</span></button>`;
+  }).join('');
+  const unbudgeted = CATEGORY_GROUPS.filter(cg => !now.byParent[cg.key] && !budgets[cg.key]);
+  const max = Math.max(1, ...months.map(m => m.total));
+  const label = new Date(now.key + '-01T00:00').toLocaleDateString(undefined, {month: 'long', year: 'numeric'});
+  return `<div class="appbar"><button class="btn ghost" data-act="home">${icon('chevron-left')} Account</button><span></span></div>
+    <h1 class="page-title">Your spending</h1>
+    <div class="month-nav"><button class="btn ghost icon-btn" data-act="spend-month" data-step="-1" aria-label="Previous month">${icon('chevron-left')}</button>
+      <b>${esc(label)}</b><button class="btn ghost icon-btn" data-act="spend-month" data-step="1" aria-label="Next month" ${thisMonth ? 'disabled' : ''}>${icon('chevron-right')}</button></div>
+    <div class="stat"><div class="lbl">Your share ${thisMonth ? 'so far this month' : 'this month'}</div><div class="val">${fmt(now.total, cur)}</div>
+      ${delta != null ? `<div class="small ${delta > 0 ? 'neg' : 'pos'}">${delta > 0 ? '▲' : '▼'} ${Math.abs(delta)}% on ${esc(prev.label)}</div>` : ''}</div>
+    <div class="section"><h3>Last six months</h3><div class="bars">${months.map(m => `<div class="bar-col${m.key === now.key ? ' current' : ''}">
+      <span class="bar-v small">${m.total ? fmt(m.total, cur).replace(/\.00$/, '') : ''}</span><span class="bar-track"><i style="height:${(m.total / max * 100).toFixed(1)}%"></i></span>
+      <span class="bar-l small">${esc(m.label)}</span></div>`).join('')}</div></div>
+    <div class="section"><h3>By category</h3>${rows ? `<div class="list">${rows}</div>` : `<p class="muted" style="margin:0">Nothing spent this month yet.</p>`}
+      ${unbudgeted.length ? `<div class="chip-row">${unbudgeted.map(cg => `<button class="pchip" data-act="budget" data-key="${cg.key}">${icon('plus', 13)} ${esc(cg.label)} budget</button>`).join('')}</div>` : ''}</div>
+    ${skipped ? `<p class="muted small">${skipped} expense${skipped > 1 ? 's' : ''} in other currencies aren’t included yet: exchange rates haven’t loaded.</p>` : ''}
+    <p class="muted small">Your share is what you owe for each expense, whoever paid. Amounts are in ${esc(cur)}${rates() ? `, converted with ${esc(rates().source)} rates` : ''}.</p>`;
 }

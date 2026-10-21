@@ -962,6 +962,23 @@ $$;
 revoke all on function public.search_people(text) from public, anon;
 grant execute on function public.search_people(text) to authenticated;
 
+-- =====================================================================
+-- Phase 4: split by items, saved default splits, budgets.
+-- =====================================================================
+alter table public.expenses drop constraint if exists expenses_split_mode_check;
+alter table public.expenses add constraint expenses_split_mode_check check (split_mode in ('equal', 'exact', 'percent', 'shares', 'adjust', 'items'));
+
+-- A group's usual split, e.g. rent 40/30/30: {"mode": "percent", "input": {...}, "inc": [...]}.
+alter table public.groups add column if not exists default_split jsonb;
+alter table public.groups drop constraint if exists groups_default_split_check;
+alter table public.groups add constraint groups_default_split_check check (default_split is null or jsonb_typeof(default_split) = 'object');
+grant update (name, currency, type, cover_url, whiteboard, simplify, default_split) on public.groups to authenticated;
+
+-- Monthly budgets per category group, in your default currency's smallest unit: {"food": 500000}.
+alter table public.profiles add column if not exists budgets jsonb not null default '{}'::jsonb;
+alter table public.profiles drop constraint if exists profiles_budgets_check;
+alter table public.profiles add constraint profiles_budgets_check check (jsonb_typeof(budgets) = 'object');
+
 -- ---------- live updates ----------
 do $$
 declare t text;

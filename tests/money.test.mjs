@@ -1,7 +1,7 @@
 // Run with: node --test tests/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { allocate, balances, simplify, pairwise, between, computeSplit, computePayers } from '../js/money.js';
+import { allocate, balances, simplify, pairwise, between, computeSplit, computePayers, computeItems, convert } from '../js/money.js';
 import { toMinor, digits, fmtMulti } from '../js/util.js';
 
 const g = {currency: 'INR'};
@@ -108,4 +108,33 @@ test('pairwise with several payers splits each debt by what each paid', () => {
 test('fmtMulti joins currencies', () => {
   assert.match(fmtMulti({INR: 20000, USD: 500}), /200\.00.*\+.*5\.00/);
   assert.equal(fmtMulti({INR: 0}), '');
+});
+
+test('split by items: shared items, tax and tip in proportion', () => {
+  const input = {list: [{name: 'Pizza', amount: '600', people: ['a', 'b']}, {name: 'Beer', amount: '400', people: ['b']}]};
+  // items 1000, bill 1100: 100 extra shared 300:700
+  const r = computeItems(110000, ['a', 'b', 'c'], input, 'INR', tm('INR'));
+  assert.deepEqual(r.split, {a: 33000, b: 77000});
+  assert.equal(sum(r.split), 110000);
+});
+test('split by items: no total entered uses the items sum', () => {
+  const r = computeItems(NaN, ['a', 'b'], {list: [{name: 'Tea', amount: '50', people: ['a', 'b']}]}, 'INR', tm('INR'));
+  assert.equal(r.total, 5000); assert.deepEqual(r.split, {a: 2500, b: 2500});
+});
+test('split by items: errors', () => {
+  assert.ok(computeItems(10000, ['a'], {list: []}, 'INR', tm('INR')).error);
+  assert.ok(computeItems(10000, ['a'], {list: [{name: 'X', amount: '50', people: []}]}, 'INR', tm('INR')).error);
+  assert.ok(computeItems(10000, ['a'], {list: [{name: 'X', amount: '500', people: ['a']}]}, 'INR', tm('INR')).error);
+  assert.ok(computeItems(10000, ['a'], {list: [{name: 'X', amount: 'abc', people: ['a']}]}, 'INR', tm('INR')).error);
+});
+test('computeSplit routes items mode', () => {
+  const r = computeSplit(30000, 'items', ['a', 'b'], new Set(), {list: [{name: 'X', amount: '300', people: ['a', 'b', 'zz']}]}, 'INR', tm('INR'));
+  assert.deepEqual(r.split, {a: 15000, b: 15000});
+});
+test('currency conversion through a common base', () => {
+  const rates = {EUR: 1, INR: 90, USD: 1.08, JPY: 160};
+  assert.equal(convert(1000, 'USD', 'INR', rates, digits), Math.round(10 / 1.08 * 90 * 100));
+  assert.equal(convert(160, 'JPY', 'EUR', rates, digits), 100);
+  assert.equal(convert(500, 'INR', 'INR', rates, digits), 500);
+  assert.equal(convert(500, 'INR', 'XYZ', rates, digits), null);
 });
