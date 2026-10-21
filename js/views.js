@@ -44,6 +44,7 @@ export function renderAuth(){
     <p style="text-align:center;font-size:14px">${m === 'signup' ? 'Already have an account? <button type="button" class="linkbtn" data-auth="signin">Sign in</button>'
       : m === 'reset' ? '<button type="button" class="linkbtn" data-auth="signin">Back to sign in</button>'
       : 'New here? <button type="button" class="linkbtn" data-auth="signup">Create an account</button>'}</p>
+    <p class="muted small" style="text-align:center"><a href="privacy.html">Privacy policy</a></p>
   </div>`;
 }
 
@@ -519,6 +520,7 @@ function renderSettings(){
   </section>
   <section class="card-sec">
     <button class="btn" data-act="signout">${icon('log-out', 16)} Sign out</button>
+    <a class="muted small" href="privacy.html">Privacy policy</a>
   </section>
   <section class="card-sec danger-zone"><h3>Delete account</h3>
     <p class="muted small" style="margin:0">Your login is deleted. Groups and expenses stay for your friends, under your name. This can’t be undone.</p>
