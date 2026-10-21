@@ -137,6 +137,7 @@ export const setToast = fn => { toastHook = fn; };
 
 export function friendly(err){
   const m = (err && (err.message || err.error_description)) || String(err);
+  if (/provider is not enabled|Unsupported provider/i.test(m)) return 'Google sign-in isn’t switched on yet. Use your email and password for now.';
   if (/Invalid login credentials/i.test(m)) return 'That email and password don’t match. Try again or reset your password.';
   if (/Email not confirmed/i.test(m)) return 'Confirm your email first: open the link we sent you, then sign in.';
   if (/User already registered/i.test(m)) return 'An account with this email already exists. Sign in instead.';

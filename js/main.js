@@ -92,6 +92,18 @@ function teardown(){
 }
 
 /* ---------- auth forms ---------- */
+// Google sign-in leaves for Google and comes back here. If something went wrong, the reason is in the address.
+const oauthError = (() => {
+  const q = new URLSearchParams(location.search), h = new URLSearchParams(location.hash.slice(1));
+  const msg = q.get('error_description') || h.get('error_description') || q.get('error') || h.get('error');
+  if (msg) history.replaceState(null, '', location.pathname);
+  return msg ? msg.replace(/\+/g, ' ') : null;
+})();
+async function signInWithGoogle(btn){
+  btn.disabled = true;
+  const {error} = await sb.auth.signInWithOAuth({provider: 'google', options: {redirectTo: appUrl(), queryParams: {prompt: 'select_account'}}});
+  if (error) { btn.disabled = false; const h = $('#aHint'); h.className = 'hint err'; h.textContent = friendly(error); }
+}
 async function onAuthSubmit(ev){
   ev.preventDefault();
   const mode = S.authMode, hint = $('#aHint'), form = ev.target;
@@ -209,6 +221,8 @@ function openFriend(key){
 // The search sheet asks for a friend's page this way.
 $('#app').addEventListener('evenly-open', ev => { if (ev.detail?.friend) openFriend(ev.detail.friend); });
 $('#app').addEventListener('click', ev => {
+  const gg = ev.target.closest('[data-auth-google]');
+  if (gg) { signInWithGoogle(gg); return; }
   const au = ev.target.closest('[data-auth]');
   if (au) { S.authMode = au.dataset.auth; render(); $('#aEmail')?.focus(); return; }
   const el = ev.target.closest('[data-act]'); if (!el) return;
@@ -272,6 +286,7 @@ $('#app').addEventListener('change', ev => {
 });
 
 /* ---------- start ---------- */
+if (oauthError) toast(`Google sign-in didn’t finish: ${friendly(oauthError)}`);
 if (!sb) render();
 else sb.auth.onAuthStateChange((event, session) => {
   S.session = session;

@@ -391,3 +391,10 @@ dialog#sheet.full #sheetBody{height:100%}
 .legend .key.total{background:color-mix(in oklab, var(--accent) 45%, var(--surface))} .legend .key.mine{background:var(--accent)}
 .month-nav{display:flex;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px}
 .bar.budget i{background:var(--owed)} .bar.budget.near i{background:var(--c-utilities)} .bar.budget.over i{background:var(--owe)}
+
+/* ---------- phase 5: Google sign-in ---------- */
+.btn.google{justify-content:center;gap:10px;background:var(--surface);border:1px solid var(--line);color:var(--ink);font-weight:600;min-height:46px}
+.btn.google:hover{background:var(--hover)}
+.btn.google svg{flex:none}
+.or-line{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px}
+.or-line::before,.or-line::after{content:"";flex:1;height:1px;background:var(--line)}

@@ -267,7 +267,7 @@ alter table public.expenses add column if not exists next_date date;
 alter table public.expenses add column if not exists repeat_parent uuid references public.expenses(id) on delete set null;
 alter table public.expenses add column if not exists bill jsonb;
 alter table public.expenses drop constraint if exists expenses_split_mode_check;
-alter table public.expenses add constraint expenses_split_mode_check check (split_mode in ('equal', 'exact', 'percent', 'shares', 'adjust'));
+alter table public.expenses add constraint expenses_split_mode_check check (split_mode in ('equal', 'exact', 'percent', 'shares', 'adjust', 'items'));
 alter table public.expenses drop constraint if exists expenses_repeat_check;
 alter table public.expenses add constraint expenses_repeat_check check (repeat in ('never', 'weekly', 'biweekly', 'monthly', 'yearly'));
 alter table public.expenses drop constraint if exists expenses_payers_check;
@@ -921,8 +921,11 @@ end $$;
 create or replace function public.profile_for_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  insert into public.profiles (id, name)
-    values (new.id, left(coalesce(nullif(trim(new.raw_user_meta_data->>'name'), ''), split_part(new.email, '@', 1)), 40))
+  -- Google sign-in gives full_name and a photo; email sign-up gives the name typed in.
+  insert into public.profiles (id, name, avatar_url)
+    values (new.id,
+            left(coalesce(nullif(trim(new.raw_user_meta_data->>'name'), ''), nullif(trim(new.raw_user_meta_data->>'full_name'), ''), split_part(new.email, '@', 1)), 40),
+            nullif(coalesce(new.raw_user_meta_data->>'avatar_url', new.raw_user_meta_data->>'picture'), ''))
     on conflict (id) do nothing;
   return new;
 exception when others then
