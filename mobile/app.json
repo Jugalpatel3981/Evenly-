@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "Evenly",
+    "slug": "evenly",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "evenly",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "app.evenly.tracker"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0e6650",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "app.evenly.tracker"
+    },
+    "web": {
+      "output": "single",
+      "favicon": "./assets/images/favicon.png",
+      "name": "Evenly",
+      "shortName": "Evenly",
+      "themeColor": "#0e6650",
+      "backgroundColor": "#eef3f0"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0e6650",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 120
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

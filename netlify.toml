@@ -28,3 +28,10 @@
   for = "/js/*"
   [headers.values]
     Cache-Control = "no-cache"
+
+# The React Native app's source lives in mobile/; it isn't part of the website.
+[[redirects]]
+  from = "/mobile/*"
+  to = "/404"
+  status = 404
+  force = true
