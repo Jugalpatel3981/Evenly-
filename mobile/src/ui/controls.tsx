@@ -96,13 +96,16 @@ function OptionList({title, options, value, search, onClose, onPick}: {title: st
 export function SwitchRow({value, onChange, title, sub, disabled}: {value: boolean; onChange: (v: boolean) => void; title: string; sub?: string; disabled?: boolean}){
   const {c} = useTheme();
   return (
-    <Pressable onPress={() => !disabled && onChange(!value)} accessibilityRole="switch" accessibilityState={{checked: value, disabled}}
+    <Pressable onPress={() => !disabled && onChange(!value)} accessibilityRole="switch" accessibilityState={{checked: value, disabled}} accessibilityLabel={title}
       style={{flexDirection: 'row', alignItems: 'center', gap: 12, opacity: disabled ? 0.5 : 1}}>
       <View style={{flex: 1}}>
         <Txt weight={sub ? 'semi' : 'body'} small={!sub}>{title}</Txt>
         {sub && <Txt small muted>{sub}</Txt>}
       </View>
-      <RNSwitch value={value} onValueChange={onChange} disabled={disabled} trackColor={{true: c.accent, false: c.line}} thumbColor="#fff" accessibilityLabel={title} />
+      {/* The whole row is the switch for screen readers; the toggle itself is just its picture. */}
+      <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" aria-hidden pointerEvents="none">
+        <RNSwitch value={value} disabled={disabled} trackColor={{true: c.accent, false: c.line}} thumbColor="#fff" />
+      </View>
     </Pressable>
   );
 }
