@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 import { boot, emit, S, teardown } from '@/lib/store';
 import { sb } from '@/lib/supabase';
 import { useTheme } from '@/ui/theme';
+import { ToastHost } from '@/ui/toast';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -43,12 +44,19 @@ export default function Root(){
       <Stack screenOptions={{headerShown: false, contentStyle: {backgroundColor: c.bg}}}>
         <Stack.Protected guard={!!session} redirectTo="/sign-in">
           <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="group/[id]" />
+          <Stack.Screen name="friend/[key]" />
+          <Stack.Screen name="expense/[id]" />
+          {/* Forms slide up over the page they were opened from. */}
+          {['expense-form', 'settle', 'group-form', 'friend-form', 'add-friend', 'search', 'pick', 'multi', 'deleted', 'filter'].map(n =>
+            <Stack.Screen key={n} name={n} options={{presentation: 'fullScreenModal', animation: 'slide_from_bottom'}} />)}
         </Stack.Protected>
         <Stack.Protected guard={!session} redirectTo="/">
           <Stack.Screen name="sign-in" />
         </Stack.Protected>
         <Stack.Screen name="auth" />
       </Stack>
+      <ToastHost />
     </ThemeProvider>
   );
 }

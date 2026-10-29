@@ -6,17 +6,20 @@ import { addMaps, balances, between, type Expense, type Map } from './money';
 import { sb } from './supabase';
 
 export type Group = {id: string; name: string; currency: string; is_direct: boolean; type?: string; cover_url?: string | null;
-  created_at: string; simplify?: boolean; whiteboard?: string; invite_code?: string; default_split?: any};
+  created_at: string; created_by?: string; simplify?: boolean; whiteboard?: string; whiteboard_by?: string | null; whiteboard_at?: string | null;
+  invite_code?: string; default_split?: any};
 export type Member = {id: string; group_id: string; user_id: string | null; name: string; email: string | null; created_at: string};
 export type Profile = {id: string; name: string; avatar_url?: string | null; default_currency?: string; budgets?: Map; [k: string]: any};
 export type Activity = {id: number; group_id: string; expense_id: string | null; actor: string | null; kind: string; data: any; created_at: string};
 export type Notification = {id: string; kind: string; data: any; read_at: string | null; created_at: string; group_id?: string; expense_id?: string};
 export type ExpenseRow = Expense & {id: string; group_id: string; description: string; date: string; created_at: string; category?: string;
-  split_mode?: string; repeat?: string; notes?: string; pending?: boolean};
+  split_mode?: string; split_input?: any; repeat?: string; next_date?: string | null; repeat_parent?: string | null; notes?: string;
+  receipt_path?: string | null; bill?: {total: number; people: string[]} | null; pending?: boolean};
 
 export const S = {
   session: null as Session | null,
   ready: false,
+  filter: 'all',
   loadError: null as string | null,
   groups: {} as Record<string, Group>,
   members: {} as Record<string, Member[]>,
@@ -137,6 +140,16 @@ export function myBalance(gid: string){
   if (!me) return out;
   for (const [cur, b] of Object.entries(groupBalances(gid))) if (b[me]) out[cur] = b[me];
   return out;
+}
+// The Friends and Groups filter: does this balance belong in the list?
+export function passes(map: Map){
+  const v = Object.values(map || {});
+  switch (S.filter) {
+    case 'outstanding': return v.some(x => x);
+    case 'owe': return v.some(x => x < 0);
+    case 'owed': return v.some(x => x > 0);
+    default: return true;
+  }
 }
 // Everything I'm owed and owe, per currency, across all groups and friends.
 export function totals(){

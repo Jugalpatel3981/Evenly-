@@ -19,6 +19,26 @@ import Heart from 'lucide-react-native/icons/heart';
 import LogOut from 'lucide-react-native/icons/log-out';
 import MessageSquare from 'lucide-react-native/icons/message-square';
 import Trash from 'lucide-react-native/icons/trash';
+import Repeat from 'lucide-react-native/icons/repeat';
+import RotateCcwClock from 'lucide-react-native/icons/rotate-ccw-clock';
+import NotebookPen from 'lucide-react-native/icons/notebook-pen';
+import Calendar from 'lucide-react-native/icons/calendar';
+import Pencil from 'lucide-react-native/icons/pencil';
+import Send from 'lucide-react-native/icons/send';
+import Settings from 'lucide-react-native/icons/settings';
+import Share2 from 'lucide-react-native/icons/share-2';
+import Copy from 'lucide-react-native/icons/copy';
+import DoorOpen from 'lucide-react-native/icons/door-open';
+import Image from 'lucide-react-native/icons/image';
+import QrCode from 'lucide-react-native/icons/qr-code';
+import RefreshCw from 'lucide-react-native/icons/refresh-cw';
+import ArrowRight from 'lucide-react-native/icons/arrow-right';
+import Smartphone from 'lucide-react-native/icons/smartphone';
+import CreditCard from 'lucide-react-native/icons/credit-card';
+import Paperclip from 'lucide-react-native/icons/paperclip';
+import KeyRound from 'lucide-react-native/icons/key-round';
+import ChartColumn from 'lucide-react-native/icons/chart-column';
+import TrendingUp from 'lucide-react-native/icons/trending-up';
 import EighthNotes from 'lucide-react-native/icons/eighth-notes';
 import ArrowLeftRight from 'lucide-react-native/icons/arrow-left-right';
 import Bell from 'lucide-react-native/icons/bell';
@@ -137,9 +157,29 @@ const ICONS: Record<string, ComponentType<LucideProps>> = {
   'plug': Plug,
   'tag': Tag,
   'groceries': Groceries,
+  'notebook-pen': NotebookPen,
+  'calendar': Calendar,
+  'pencil': Pencil,
+  'send': Send,
+  'settings': Settings,
+  'share-2': Share2,
+  'copy': Copy,
+  'door-open': DoorOpen,
+  'image': Image,
+  'qr-code': QrCode,
+  'refresh-cw': RefreshCw,
+  'arrow-right': ArrowRight,
+  'smartphone': Smartphone,
+  'credit-card': CreditCard,
+  'paperclip': Paperclip,
+  'key-round': KeyRound,
+  'chart-column': ChartColumn,
+  'trending-up': TrendingUp,
   // Names the web app used, now renamed in Lucide.
   'trash-2': Trash,
   'music': EighthNotes,
+  'repeat': Repeat,
+  'history': RotateCcwClock,
 };
 
 export type IconName = keyof typeof ICONS | string;

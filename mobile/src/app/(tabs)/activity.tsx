@@ -1,13 +1,15 @@
 // Activity tab: everything that happened in my groups, and notifications meant for me.
+import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 
 import { activityIcon, activityImpact, activityParts } from '@/lib/activity';
+import { restoreExpense } from '@/lib/actions';
 import { noteIcon, noteText } from '@/lib/messages';
 import { emit, unreadCount, useStore } from '@/lib/store';
 import { sb } from '@/lib/supabase';
 import { ago } from '@/lib/util';
-import { CatIcon, Empty, Loading, Row, Screen, Seg, Title, Txt } from '@/ui/kit';
+import { AppBar, Button, CatIcon, Empty, Fab, IconButton, Loading, Row, Screen, Seg, Title, Txt } from '@/ui/kit';
 import { usePullToRefresh } from '@/ui/refresh';
 import { useTheme } from '@/ui/theme';
 
@@ -30,26 +32,33 @@ export default function ActivityTab(){
   if (!S.ready) return <Loading text="Opening your balances…" />;
   const feed = S.activity.filter(a => S.groups[a.group_id]).map(a => ({a, parts: activityParts(a)})).filter(x => x.parts.length);
   return (
+    <View style={{flex: 1}}>
     <Screen refresh={refresh}>
+      <AppBar left={<IconButton icon="search" label="Search" onPress={() => router.push('/search')} />} />
       <Title>Activity</Title>
       <Seg value={tab} onChange={setTab} options={[['all', 'All activity'], ['foryou', n ? `For you (${n})` : 'For you']]} />
       {tab === 'all' ? (feed.length ? <View>{feed.map(({a, parts}) => {
         const ic = activityIcon(a), impact = activityImpact(a);
+        const exists = !!(a.expense_id && S.expenses[a.expense_id]);
+        const restore = a.kind === 'expense_deleted' && !exists;
         return (
-          <Row key={a.id} style={{alignItems: 'flex-start'}}>
+          <Row key={a.id} style={{alignItems: 'flex-start'}} onPress={exists ? () => router.push({pathname: '/expense/[id]', params: {id: a.expense_id!}}) : undefined}>
             <CatIcon cat={ic.cat} icon={ic.icon} color={ic.tone === 'owe' ? c.owe : ic.tone ? c.accent : undefined} />
             <View style={{flex: 1, gap: 2}}>
               <Txt>{parts.map((p, i) => <Txt key={i} weight={p.b ? 'bold' : 'body'} muted={p.muted}>{p.t}</Txt>)}</Txt>
               {impact && <Txt small weight="semi" color={impact.pos ? c.owed : c.owe}>{impact.text}</Txt>}
               <Txt small muted>{ago(a.created_at)}</Txt>
             </View>
+            {restore && <Button small icon="rotate-ccw" title="Restore" onPress={() => restoreExpense(a.id)} />}
           </Row>
         );
       })}</View> : <Empty title="Nothing yet" text="Expenses, payments, comments and changes from all your friends and groups show up here." />)
       : (S.notifications.length ? <View>{S.notifications.map(x => {
         const t = noteText(x);
+        const open = x.expense_id && S.expenses[x.expense_id] ? () => router.push({pathname: '/expense/[id]', params: {id: x.expense_id!}})
+          : x.group_id && S.groups[x.group_id] ? () => router.push({pathname: '/group/[id]', params: {id: x.group_id!}}) : undefined;
         return (
-          <Row key={x.id} style={{alignItems: 'flex-start'}}>
+          <Row key={x.id} style={{alignItems: 'flex-start'}} onPress={open}>
             <CatIcon icon={noteIcon(x)} color={c.accent} />
             <View style={{flex: 1, gap: 2}}>
               <Txt weight="bold">{t.title}</Txt>
@@ -60,5 +69,7 @@ export default function ActivityTab(){
         );
       })}</View> : <Empty title="You’re all caught up" text="When friends add expenses with you, comment, pay you or send a reminder, it shows up here." />)}
     </Screen>
+    <Fab inset={false} onPress={() => router.push('/pick')} />
+    </View>
   );
 }

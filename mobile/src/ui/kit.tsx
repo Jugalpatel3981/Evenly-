@@ -1,6 +1,6 @@
 // Building blocks shared by every screen.
 import { Image } from 'expo-image';
-import { type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
   type StyleProp, type TextInputProps, type TextStyle, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -87,17 +87,29 @@ export function LinkText({title, onPress, small}: {title: string; onPress: () =>
 }
 
 /* ---------- form fields ---------- */
-export function Field({label, style, ...props}: TextInputProps & {label: string}){
+export function Field({label, style, onFocus, onBlur, ...props}: TextInputProps & {label: string}){
   const {c} = useTheme();
+  const [focus, setFocus] = useState(false);
   return (
     <View style={{gap: 6}}>
       <Txt weight="semi" small muted>{label}</Txt>
       <TextInput placeholderTextColor={c.muted} {...props} accessibilityLabel={label}
-        style={[{fontFamily: F.body, fontSize: 16, color: c.ink, backgroundColor: c.field, borderWidth: 1, borderColor: c.line,
-          borderRadius: 12, paddingHorizontal: 14, paddingVertical: Platform.OS === 'web' ? 12 : 10, minHeight: 46}, style]} />
+        onFocus={e => { setFocus(true); onFocus?.(e); }} onBlur={e => { setFocus(false); onBlur?.(e); }}
+        style={[{fontFamily: F.body, fontSize: 16, color: c.ink, backgroundColor: c.field, borderWidth: 1, borderColor: focus ? c.accent : c.line,
+          borderRadius: 12, paddingHorizontal: 14, paddingVertical: Platform.OS === 'web' ? 12 : 10, minHeight: 46, opacity: props.editable === false ? 0.6 : 1}, noOutline, style]} />
     </View>
   );
 }
+// The big underlined inputs of the expense and settle-up forms: the line turns green while typing.
+export function LineInput({style, onFocus, onBlur, ...props}: TextInputProps){
+  const {c} = useTheme();
+  const [focus, setFocus] = useState(false);
+  return <TextInput placeholderTextColor={c.muted} {...props}
+    onFocus={e => { setFocus(true); onFocus?.(e); }} onBlur={e => { setFocus(false); onBlur?.(e); }}
+    style={[{fontFamily: F.medium, color: c.ink, borderBottomWidth: 2, borderBottomColor: focus ? c.accent : c.line, flex: 1, paddingVertical: 6, minWidth: 0}, noOutline, style]} />;
+}
+// Browsers draw their own focus ring; these fields show focus with their border instead.
+export const noOutline = Platform.OS === 'web' ? ({outlineStyle: 'none', outlineWidth: 0} as any) : null;
 export function Hint({text, ok}: {text?: string | null; ok?: boolean}){
   const {c} = useTheme();
   if (!text) return null;
@@ -174,5 +186,20 @@ export function Seg<T extends string>({options, value, onChange}: {options: [T, 
         </Pressable>
       ))}
     </View>
+  );
+}
+
+/* ---------- floating "Add expense" button ---------- */
+export function Fab({onPress, bottom = 18, inset = true}: {onPress: () => void; bottom?: number; inset?: boolean}){
+  const {c} = useTheme();
+  const insets = useSafeAreaInsets();
+  return (
+    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel="Add expense"
+      style={({pressed}) => ({position: 'absolute', right: 16, bottom: bottom + (inset ? insets.bottom : 0), flexDirection: 'row', alignItems: 'center', gap: 8,
+        backgroundColor: c.accent, paddingVertical: 14, paddingHorizontal: 20, borderRadius: 16, opacity: pressed ? 0.85 : 1,
+        shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: {width: 0, height: 6}, elevation: 6})}>
+      <Icon name="receipt" size={20} color={c.accentInk} />
+      <Txt weight="bold" color={c.accentInk} style={{fontSize: 16}}>Add expense</Txt>
+    </Pressable>
   );
 }
