@@ -8,7 +8,7 @@ import { KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, TextInp
 import { changes, REPEATS, run, whoDid } from '@/lib/actions';
 import { catOf, GROUP_TYPES } from '@/lib/categories';
 import { curOf, payersOf } from '@/lib/money';
-import { avatarUrl, expOf, friendly, member, myId, myName, nameOf, personName, S, titleOf, uid, useStore, type ExpenseRow, type Group } from '@/lib/store';
+import { avatarUrl, expOf, friendly, member, myId, myName, nameOf, personName, S, save, titleOf, uid, useStore, type ExpenseRow, type Group } from '@/lib/store';
 import { sb } from '@/lib/supabase';
 import { ago, fmt, niceDate } from '@/lib/util';
 import { Bar } from '@/ui/charts';
@@ -77,12 +77,13 @@ function Detail({e, g}: {e: ExpenseRow; g: Group}){
   async function post(){
     const text = body.trim(); if (!text) return;
     setBusy(true);
-    const ok = await run(sb.from('comments').insert({id: Crypto.randomUUID(), expense_id: e.id, group_id: g.id, body: text}));
+    const cid = Crypto.randomUUID();
+    const ok = await save('comments', 'insert', {id: cid, expense_id: e.id, group_id: g.id, body: text}, cid);
     setBusy(false);
     if (ok) { setBody(''); reload(); }
   }
   async function delComment(cid: string){ if (await run(sb.from('comments').delete().eq('id', cid))) reload(); }
-  async function remove(){ if (await run(sb.from('expenses').delete().eq('id', e.id), 'Deleted. You can restore it from Activity.')) router.back(); }
+  async function remove(){ if (await save('expenses', 'delete', null, e.id, 'Deleted. You can restore it from Activity.')) router.back(); }
   const edit = () => router.push(isPay ? {pathname: '/settle', params: {gid: g.id, pid: e.id}} : {pathname: '/expense-form', params: {gid: g.id, eid: e.id}});
 
   const youLower = (s: string) => s.replace(/^You$/, 'you');

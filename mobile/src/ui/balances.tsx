@@ -3,7 +3,8 @@ import { router } from 'expo-router';
 import { View } from 'react-native';
 
 import { between, type Map } from '@/lib/money';
-import { expOf, membersOf, myId, personName, S, totals, type Group } from '@/lib/store';
+import { rates, sumIn } from '@/lib/rates';
+import { defaultCurrency, expOf, membersOf, myId, personName, S, totals, type Group } from '@/lib/store';
 import { fmt, fmtMulti } from '@/lib/util';
 
 import { Icon } from './icons';
@@ -24,6 +25,7 @@ export function TotalCard(){
         {Object.keys(owe).length > 0 && <Txt weight="semi" color={c.owe}>You owe {fmtMulti(owe)}</Txt>}
         {Object.keys(owed).length > 0 && <Txt weight="semi" color={c.owed}>You are owed {fmtMulti(owed)}</Txt>}
         {!any && <Txt muted>You’re all settled up</Txt>}
+        <Overall owed={owed} owe={owe} />
       </View>
       <View style={{borderRadius: 21, backgroundColor: S.filter !== 'all' ? c.accent + '22' : 'transparent'}}>
         <IconButton icon="sliders-horizontal" label="Filter" color={S.filter !== 'all' ? c.accent : c.ink} size={20} onPress={() => router.push('/filter')} />
@@ -73,4 +75,14 @@ export function GroupLines({g, max = 2, big}: {g: Group; max?: number; big?: boo
     {lines.slice(0, max).map(x => <PersonLines key={x.m.id} name={personName(x.m)} amt={x.amt} big={big} />)}
     {lines.length > max && <Txt small={!big} muted>Plus {lines.length - max} more balance{lines.length - max > 1 ? 's' : ''}</Txt>}
   </>;
+}
+
+// With balances in more than one currency, also the overall total in your default currency.
+function Overall({owed, owe}: {owed: Map; owe: Map}){
+  const curs = new Set([...Object.keys(owed), ...Object.keys(owe)]), mine = defaultCurrency();
+  if (!curs.size || (curs.size === 1 && curs.has(mine))) return null;
+  const a = sumIn(owed, mine), b = sumIn(owe, mine);
+  if (a == null || b == null) return null;
+  const net = a - b;
+  return <Txt small>{net >= 0 ? 'Overall you are owed' : 'Overall you owe'} ≈ <Txt small weight="bold">{fmt(net, mine)}</Txt> <Txt small muted>· {rates()?.source || ''} rates</Txt></Txt>;
 }

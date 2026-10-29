@@ -4,7 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { Platform, TextInput, View } from 'react-native';
 
-import { canRemind, run, sendReminder, summaryText } from '@/lib/actions';
+import { canRemind, exportGroupCsv, run, sendReminder, summaryText } from '@/lib/actions';
 import { CATEGORY_GROUPS, catOf } from '@/lib/categories';
 import { curOf, pairwise, payersOf, simplify, type Map } from '@/lib/money';
 import { avatarUrl, expOf, friendOf, friendsIndex, groupBalances, membersOf, myBalance, myId, nameOf, personName, S, titleOf, uid,
@@ -84,6 +84,7 @@ export default function GroupPage(){
           <Chip title="Totals" on={t === 'insights'} onPress={() => setTab('insights')} />
           {!g.is_direct && <Chip title="Whiteboard" on={t === 'board'} onPress={() => setTab('board')} />}
           {(!g.is_direct || (f && !f.user_id)) && <Chip icon="share-2" title="Invite" onPress={() => router.push({pathname: '/invite', params: {gid: g.id}})} />}
+          {hasExp && <Chip icon="copy" title="Export" onPress={() => exportGroupCsv(g.id)} />}
         </View>
         {g.is_direct && f && !f.user_id && (
           <View style={{flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: c.accent + '1a', borderRadius: 14, padding: 12, flexWrap: 'wrap'}}>

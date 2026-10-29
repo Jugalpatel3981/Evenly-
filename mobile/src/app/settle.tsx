@@ -5,10 +5,8 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, View } from 'react-native';
 
-import { run } from '@/lib/actions';
 import { curOf, pairwise, simplify } from '@/lib/money';
-import { avatarUrl, expOf, groupBalances, member, membersOf, myId, nameOf, personName, S, useStore } from '@/lib/store';
-import { sb } from '@/lib/supabase';
+import { avatarUrl, expOf, groupBalances, member, membersOf, myId, nameOf, personName, S, save, useStore } from '@/lib/store';
 import { curSymbol, fmt, fromMinor, today, toMinor } from '@/lib/util';
 import { ConfirmButton, FormBar, Select, Tool } from '@/ui/controls';
 import { DateTool } from '@/ui/date-picker';
@@ -69,12 +67,12 @@ function Form({gid, pid, ...pre}: {gid: string; from?: string; to?: string; amt?
     const row = {group_id: g.id, kind: 'payment', description: 'Payment', amount: a, paid_by: from, payers: null, split: {[to]: a},
       split_mode: 'exact', split_input: {}, category: 'general', currency: cur, date: date || today()};
     setBusy(true);
-    const ok = p ? await run(sb.from('expenses').update(row).eq('id', p.id), `Payment of ${fmt(a, cur)} recorded`)
-                 : await run(sb.from('expenses').insert({...row, id: Crypto.randomUUID()}), `Payment of ${fmt(a, cur)} recorded`);
+    const pid = p ? p.id : Crypto.randomUUID();
+    const ok = await save('expenses', p ? 'update' : 'insert', p ? row : {...row, id: pid}, pid, `Payment of ${fmt(a, cur)} recorded`);
     setBusy(false);
     if (ok) router.back();
   }
-  async function remove(){ if (await run(sb.from('expenses').delete().eq('id', p!.id), 'Payment deleted')) router.back(); }
+  async function remove(){ if (await save('expenses', 'delete', null, p!.id, 'Payment deleted')) router.back(); }
 
   return (
     <KeyboardAvoidingView style={{flex: 1, backgroundColor: c.bg}} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>

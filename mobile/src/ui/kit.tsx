@@ -9,6 +9,7 @@ import { catOf, typeOf } from '@/lib/categories';
 import { initials } from '@/lib/util';
 
 import { Icon, type IconName } from './icons';
+import { OfflineBar } from './offline-bar';
 import { F, useTheme } from './theme';
 
 /* ---------- text ---------- */
@@ -41,7 +42,7 @@ export function Screen({children, bottom = 110, top = true, refresh}: {children:
   return (
     <ScrollView style={{flex: 1, backgroundColor: c.bg}} keyboardShouldPersistTaps="handled" refreshControl={refresh as any}
       contentContainerStyle={{paddingTop: top ? insets.top + 8 : 8, paddingBottom: bottom + insets.bottom, paddingHorizontal: 16}}>
-      <View style={{width: '100%', maxWidth: 720, alignSelf: 'center', gap: 18}}>{children}</View>
+      <View style={{width: '100%', maxWidth: 720, alignSelf: 'center', gap: 18}}><OfflineBar />{children}</View>
     </ScrollView>
   );
 }

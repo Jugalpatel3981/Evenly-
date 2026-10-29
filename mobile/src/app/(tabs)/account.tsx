@@ -4,7 +4,9 @@ import * as WebBrowser from 'expo-web-browser';
 import { useState, type ReactNode } from 'react';
 import { Platform, Pressable, View } from 'react-native';
 
-import { run } from '@/lib/actions';
+import { router } from 'expo-router';
+
+import { downloadBackup, run } from '@/lib/actions';
 import { choosePhoto, publicUrl, upload } from '@/lib/photos';
 import { appUrl } from '@/lib/auth';
 import { friendly, loadAll, myName, myProfile, uid, useStore } from '@/lib/store';
@@ -152,6 +154,14 @@ export default function AccountTab(){
         <Inline button={<Button title="Change" onPress={changePass} busy={busy === 'pass'} />}>
           <Field label="New password" value={pass} onChangeText={setPass} secureTextEntry autoComplete="new-password" placeholder="At least 6 characters" />
         </Inline>
+      </Section>
+      <Section title="Spending and budgets" icon="chart-column">
+        <Txt small muted>Your share of everything this month, by category, with optional monthly budgets.</Txt>
+        <Button icon="trending-up" title="See your spending" onPress={() => router.push('/spending')} style={{alignSelf: 'flex-start'}} />
+      </Section>
+      <Section title="Your data" icon="history">
+        <Txt small muted>Download everything you can see in Evenly as one file, to keep as a backup. Each group can also be exported as a spreadsheet from its page.</Txt>
+        <Button icon="copy" title="Download a backup" onPress={downloadBackup} style={{alignSelf: 'flex-start'}} />
       </Section>
       <Section title="Invite friends to Evenly" icon="share-2">
         <View style={{flexDirection: 'row', alignItems: 'center', gap: 10}}>

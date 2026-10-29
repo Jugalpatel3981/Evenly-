@@ -54,3 +54,6 @@ export function choosePhoto(max: number, title: string): Promise<Photo | null> {
     ], {cancelable: true, onDismiss: () => resolve(null)});
   });
 }
+
+// "<prefix>-<time>.jpg": a new name for each upload, so phones don't show an old cached copy.
+export const stampedPath = (prefix: string) => `${prefix}-${Date.now()}.jpg`;

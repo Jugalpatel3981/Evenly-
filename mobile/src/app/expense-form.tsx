@@ -8,8 +8,9 @@ import { KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View 
 import { MODE_WORDS, REPEATS, run } from '@/lib/actions';
 import { guessCategory, GROUP_TYPES } from '@/lib/categories';
 import { computePayers, curOf } from '@/lib/money';
-import { choosePhoto, upload, type Photo } from '@/lib/photos';
-import { avatarUrl, friendly, friendOf, membersOf, myId, nameOf, S, titleOf, useStore } from '@/lib/store';
+import { choosePhoto, stampedPath, upload, type Photo } from '@/lib/photos';
+import { rates, toCurrency } from '@/lib/rates';
+import { avatarUrl, friendly, friendOf, membersOf, myId, nameOf, S, save, titleOf, useStore } from '@/lib/store';
 import { sb } from '@/lib/supabase';
 import { curSymbol, fmt, fromMinor, today, toMinor } from '@/lib/util';
 import { ConfirmButton, FormBar, Select, SwitchRow, Tool } from '@/ui/controls';
@@ -69,6 +70,8 @@ function Form({gid, eid}: {gid: string; eid?: string}){
   const perPerson = split.mode === 'equal' && n && total > 0 ? `(${fmt(Math.floor(total / n), cur)}/person)`
     : split.mode === 'items' && result.total && !(total > 0) ? `(${fmt(result.total, cur)} from the items)` : '';
 
+  // An expense in another currency: show it in the group's currency, with a button to convert it.
+  const conv = cur !== g.currency && total > 0 ? toCurrency(total, cur, g.currency) : null;
   const onDesc = (v: string) => { setDesc(v); if (!catTouched) { const k = guessCategory(v); if (k) setCat(k); } };
 
   async function submit(){
@@ -91,11 +94,11 @@ function Form({gid, eid}: {gid: string; eid?: string}){
     const id = e ? e.id : Crypto.randomUUID();
     const full: Record<string, unknown> = {...row};
     if (receipt.photo) {
-      try { full.receipt_path = await upload('receipts', `${g.id}/${id}-${Date.now()}.jpg`, receipt.photo); }
+      try { full.receipt_path = await upload('receipts', stampedPath(`${g.id}/${id}`), receipt.photo); }
       catch (err) { setBusy(false); toast(friendly(err)); return; }
     } else if (receipt.removed) full.receipt_path = null;
-    const ok = e ? await run(sb.from('expenses').update(full).eq('id', e.id), 'Expense updated')
-                 : await run(sb.from('expenses').insert({...full, id}), 'Expense added');
+    const ok = e ? await save('expenses', 'update', full, e.id, 'Expense updated')
+                 : await save('expenses', 'insert', {...full, id}, id, 'Expense added');
     if (ok && e?.receipt_path && (receipt.photo || receipt.removed)) sb.storage.from('receipts').remove([e.receipt_path]);
     // Remember (or forget) this split as the group's default.
     const wantDefault = useDefault && split.mode !== 'items';
@@ -107,7 +110,7 @@ function Form({gid, eid}: {gid: string; eid?: string}){
     if (ok) router.back();
   }
   async function remove(){
-    if (await run(sb.from('expenses').delete().eq('id', e!.id), 'Expense deleted. You can restore it from Activity.')) router.back();
+    if (await save('expenses', 'delete', null, e!.id, 'Expense deleted. You can restore it from Activity.')) router.back();
   }
 
   const square = {width: 56, height: 56, borderRadius: 14, borderWidth: 1, borderColor: c.line, backgroundColor: c.surface, alignItems: 'center' as const, justifyContent: 'center' as const};
@@ -140,6 +143,11 @@ function Form({gid, eid}: {gid: string; eid?: string}){
             accessibilityLabel="Amount" style={{fontSize: 36, fontFamily: F.display}} />
         </View>
 
+        {conv != null && (
+          <Txt small muted>≈ {fmt(conv, g.currency)} at today’s rate · <LinkText small title={`Convert to ${g.currency}`} onPress={() => {
+            setCur(g.currency); setAmt(fromMinor(conv, g.currency));
+            toast(`Converted to ${g.currency} using ${rates()?.source || 'today’s'} rates`);
+          }} /></Txt>)}
         <Pressable onPress={() => setPanel(!panel)} accessibilityRole="button" accessibilityState={{expanded: panel}}
           style={({pressed}) => ({alignSelf: 'center', paddingHorizontal: 18, paddingVertical: 10, borderRadius: 22, borderWidth: 1, borderColor: c.line, backgroundColor: pressed ? c.hover : c.surface})}>
           <Txt>Paid by <Txt weight="bold" color={c.accent}>{who}</Txt> and split <Txt weight="bold" color={c.accent}>{MODE_WORDS[split.mode]}</Txt></Txt>

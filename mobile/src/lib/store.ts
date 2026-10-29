@@ -3,6 +3,10 @@ import type { RealtimeChannel, Session } from '@supabase/supabase-js';
 import { useSyncExternalStore } from 'react';
 
 import { addMaps, balances, between, type Expense, type Map } from './money';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { isOnline, onNetChange } from './net';
+import { refreshRates } from './rates';
 import { sb } from './supabase';
 
 export type Group = {id: string; name: string; currency: string; is_direct: boolean; type?: string; cover_url?: string | null;
@@ -16,11 +20,15 @@ export type ExpenseRow = Expense & {id: string; group_id: string; description: s
   split_mode?: string; split_input?: any; repeat?: string; next_date?: string | null; repeat_parent?: string | null; notes?: string;
   receipt_path?: string | null; bill?: {total: number; people: string[]} | null; pending?: boolean};
 
+export type Change = {table: string; op: 'insert' | 'update' | 'delete'; row?: Record<string, any> | null; id: string};
+
 export const S = {
   session: null as Session | null,
   ready: false,
   filter: 'all',
   loadError: null as string | null,
+  offline: false,
+  outbox: [] as Change[],
   groups: {} as Record<string, Group>,
   members: {} as Record<string, Member[]>,
   expenses: {} as Record<string, ExpenseRow>,
@@ -73,8 +81,72 @@ export async function loadAll(){
   S.activity = a;
   S.notifications = nt;
   S.ready = true;
+  S.offline = false;
+  saveSnapshot();
   emit();
 }
+
+/* ---------- offline: a copy of the data on this device, and a queue of changes to send ---------- */
+const snapKey = () => 'evenly.cache.' + uid(), outboxKey = () => 'evenly.outbox.' + uid();
+export const isNetworkError = (err: unknown) => !isOnline() ||
+  /Failed to fetch|NetworkError|Load failed|Network request failed|network|fetch failed/i.test(((err as any)?.message || (err as any)?.error_description) || String(err));
+function saveSnapshot(){
+  AsyncStorage.setItem(snapKey(), JSON.stringify({at: Date.now(), groups: S.groups, members: S.members, expenses: S.expenses, profiles: S.profiles,
+    activity: S.activity.slice(0, 100), notifications: S.notifications.slice(0, 50)})).catch(() => { /* storage full: the offline copy is a nice-to-have */ });
+}
+// Used when the server can't be reached: show the last copy, plus any changes still waiting to be sent.
+export async function loadSnapshot(){
+  let snap: any = null;
+  try { snap = JSON.parse((await AsyncStorage.getItem(snapKey())) || 'null'); } catch {}
+  if (!snap) return false;
+  Object.assign(S, {groups: snap.groups, members: snap.members, expenses: snap.expenses, profiles: snap.profiles,
+    activity: snap.activity || [], notifications: snap.notifications || [], ready: true, offline: true});
+  S.outbox.forEach(applyLocal);
+  emit();
+  return true;
+}
+async function readOutbox(){ try { S.outbox = JSON.parse((await AsyncStorage.getItem(outboxKey())) || '[]'); } catch { S.outbox = []; } }
+const writeOutbox = () => AsyncStorage.setItem(outboxKey(), JSON.stringify(S.outbox)).catch(() => {});
+function applyLocal({table, op, row, id}: Change){
+  if (table !== 'expenses') return;
+  if (op === 'delete') delete S.expenses[id];
+  else S.expenses[id] = {...(S.expenses[id] || {created_at: new Date().toISOString()}), ...row, id, pending: true} as ExpenseRow;
+}
+const request = ({table, op, row, id}: Change) => op === 'insert' ? sb.from(table).insert(row!) : op === 'update' ? sb.from(table).update(row!).eq('id', id) : sb.from(table).delete().eq('id', id);
+// Save a change; if there's no connection, keep it on the device and send it later.
+export async function save(table: string, op: Change['op'], row: Change['row'], id: string, okMsg?: string): Promise<boolean> {
+  const change: Change = {table, op, row, id};
+  if (isOnline()) {
+    const {error} = await request(change);
+    if (!error) { if (okMsg) toastHook(okMsg); scheduleReload(); return true; }
+    if (!isNetworkError(error)) { toastHook(friendly(error)); return false; }
+  }
+  S.outbox = [...S.outbox, change]; writeOutbox();
+  applyLocal(change);
+  S.offline = true;
+  saveSnapshot();
+  toastHook(`${okMsg || 'Saved'}. It will sync when you’re back online.`);
+  emit();
+  return true;
+}
+// Send queued changes in order. Stops at the first one the network refuses, and tries again later.
+let flushing = false;
+export async function flushOutbox(){
+  if (flushing || !isOnline() || !uid()) return;
+  flushing = true;
+  let sent = 0;
+  try {
+    while (S.outbox.length) {
+      const {error} = await request(S.outbox[0]);
+      if (error && isNetworkError(error)) break;
+      if (error) toastHook(`A change made offline couldn’t be saved: ${friendly(error)}`); else sent++;
+      S.outbox = S.outbox.slice(1); writeOutbox();
+    }
+  } finally { flushing = false; }
+  if (sent) { toastHook(`Synced ${sent} change${sent > 1 ? 's' : ''} made offline`); await loadAll().catch(() => {}); }
+}
+let toastHook: (m: string) => void = () => {};
+export const setToast = (fn: (m: string) => void) => { toastHook = fn; };
 let reloadT: ReturnType<typeof setTimeout> | undefined;
 export const scheduleReload = () => { clearTimeout(reloadT); reloadT = setTimeout(() => { loadAll().catch(() => {}); }, 250); };
 
@@ -84,22 +156,28 @@ export async function boot(){
   const me = uid();
   if (!me || booted === me) return;
   booted = me; S.ready = false; emit();
+  await readOutbox();
   try { await sb.rpc('claim_invites'); } catch {}
   try {
+    await flushOutbox();
     await loadAll();
     if (!myProfile()) await sb.from('profiles').upsert({id: me, name: myName()}, {onConflict: 'id', ignoreDuplicates: true});
     const {data: made} = await sb.rpc('process_recurring');
     if (made || !myProfile()) await loadAll();
   } catch (err) {
-    S.ready = true; S.loadError = friendly(err); emit();
+    // No connection: open with the copy saved on this device.
+    if (isNetworkError(err) && await loadSnapshot()) toastHook('You’re offline. Showing your last saved balances.');
+    else { S.ready = true; S.loadError = friendly(err); emit(); }
   }
+  // Exchange rates for converted totals; the screens update when they arrive.
+  refreshRates().then(r => { if (r) emit(); });
   if (channel) sb.removeChannel(channel);
   channel = sb.channel('evenly-' + me).on('postgres_changes', {event: '*', schema: 'public'}, scheduleReload).subscribe();
 }
 export function teardown(){
   booted = null;
   if (channel) { sb.removeChannel(channel); channel = null; }
-  Object.assign(S, {groups: {}, members: {}, expenses: {}, profiles: {}, activity: [], notifications: [], ready: false, loadError: null});
+  Object.assign(S, {groups: {}, members: {}, expenses: {}, profiles: {}, activity: [], notifications: [], ready: false, loadError: null, offline: false, outbox: []});
   emit();
 }
 export function friendly(err: unknown){
@@ -189,3 +267,10 @@ export function friendsIndex(){
   }
   return out;
 }
+
+// Back online: send what was queued, then reload. Gone offline: say so.
+onNetChange(async on => {
+  if (!S.session) return;
+  if (on) { await flushOutbox(); loadAll().catch(() => {}); }
+  else { S.offline = true; emit(); }
+});

@@ -2,11 +2,12 @@
 import { toast } from '@/ui/toast';
 
 import { catOf } from './categories';
-import { payersOf } from './money';
-import { defaultCurrency, expOf, friendly, loadAll, membersOf, myId, myName, nameOf, S, scheduleReload, titleOf, uid,
+import { saveFile } from './files';
+import { curOf, payersOf } from './money';
+import { defaultCurrency, expOf, friendly, loadAll, membersOf, myId, myName, nameOf, personName, S, scheduleReload, titleOf, uid,
   type Friend, type Group } from './store';
 import { sb } from './supabase';
-import { fmt, niceDate } from './util';
+import { fmt, fromMinor, niceDate, today } from './util';
 
 export const REPEATS: [string, string][] = [['never', 'Doesn’t repeat'], ['weekly', 'Every week'], ['biweekly', 'Every 2 weeks'], ['monthly', 'Every month'], ['yearly', 'Every year']];
 export const MODES: [string, string][] = [['equal', 'Equally'], ['exact', 'Exact'], ['percent', '%'], ['shares', 'Shares'], ['adjust', '+/−'], ['items', 'Items']];
@@ -101,4 +102,34 @@ export function canRemind(gid: string, mid: string){ const m = membersOf(gid).fi
 export async function sendReminder(gid: string, mid: string, amount: number, cur: string){
   const ok = await run(sb.rpc('send_reminder', {p_group: gid, p_member: mid, p_amount: Number(amount), p_currency: cur}));
   if (ok) toast(`Reminder sent to ${nameOf(gid, mid)}`);
+}
+
+/* ---------- export and backup ---------- */
+const csvCell = (v: unknown) => { const t = String(v ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+// One row per expense or payment; one column per person with what they paid minus their share.
+export function groupCsv(gid: string){
+  const g = S.groups[gid], ms = membersOf(gid);
+  const head = ['Date', 'Description', 'Category', 'Cost', 'Currency', ...ms.map(m => personName(m))];
+  const totals: Record<string, Record<string, number>> = {};
+  const lines = expOf(gid).slice().reverse().map(e => {
+    const c = curOf(e, g);
+    const per = ms.map(m => { const v = Number(payersOf(e)[m.id] || 0) - Number(e.split?.[m.id] || 0); ((totals[c] ||= {})[m.id] = (totals[c][m.id] || 0) + v); return fromMinor(v, c); });
+    return [e.date, e.kind === 'payment' ? `${nameOf(gid, e.paid_by)} paid ${nameOf(gid, Object.keys(e.split)[0])}` : e.description,
+      e.kind === 'payment' ? 'Payment' : catOf(e.category).label, fromMinor(Number(e.amount), c), c, ...per];
+  });
+  for (const [c, t] of Object.entries(totals)) lines.push(['', 'Total balance', '', '', c, ...ms.map(m => fromMinor(t[m.id] || 0, c))]);
+  const name = `${(g.is_direct ? `evenly-${titleOf(g)}` : g.name).replace(/[^\w-]+/g, '-').replace(/-+/g, '-').toLowerCase()}-${today()}.csv`;
+  return {name, text: '﻿' + [head, ...lines].map(r => r.map(csvCell).join(',')).join('\n')};
+}
+export async function exportGroupCsv(gid: string){
+  const {name, text} = groupCsv(gid);
+  try { await saveFile(name, text, 'text/csv'); } catch (err) { toast(friendly(err)); }
+}
+export async function downloadBackup(){
+  toast('Preparing your backup…');
+  const {data: comments} = await sb.from('comments').select('*').limit(10000);
+  const backup = {app: 'Evenly', exported_at: new Date().toISOString(), you: {id: uid(), email: S.session?.user?.email, profile: S.profiles[uid() || ''] || null},
+    groups: Object.values(S.groups), members: Object.values(S.members).flat(), expenses: Object.values(S.expenses).map(({pending: _p, ...e}) => e),
+    comments: comments || [], people: Object.values(S.profiles).map(p => ({id: p.id, name: p.name}))};
+  try { await saveFile(`evenly-backup-${today()}.json`, JSON.stringify(backup, null, 2), 'application/json'); } catch (err) { toast(friendly(err)); }
 }
