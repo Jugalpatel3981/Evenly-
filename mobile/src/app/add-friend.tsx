@@ -23,10 +23,16 @@ export default function AddFriend(){
     const {data: id, error} = await sb.rpc('add_friend', {p_my_name: myName(), p_name: m.name, p_email: m.email || null, p_currency: defaultCurrency(), p_friend_user: m.user || null});
     if (error) return setHint(friendly(error));
     await loadAll();
+    if (!m.user && !m.email) {
+      // Not on Evenly: show the invite link straight away.
+      router.replace({pathname: '/group/[id]', params: {id: id as string}});
+      router.push({pathname: '/invite', params: {gid: id as string}});
+      return;
+    }
     if (then === 'expense') router.replace({pathname: '/expense-form', params: {gid: id as string}});
     else router.replace({pathname: '/group/[id]', params: {id: id as string}});
     toast(m.user ? (known.has(m.user) ? `You and ${m.name} are already friends` : `Connected with ${m.name}`)
-      : m.email ? `${m.name} added. They’re connected when they sign up with ${m.email}.` : `${m.name} added`);
+      : `${m.name} added. They’re connected when they sign up with ${m.email}.`);
   }
   return (
     <View style={{flex: 1, backgroundColor: c.bg}}>

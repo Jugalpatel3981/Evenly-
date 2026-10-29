@@ -6,6 +6,7 @@ import { friendsIndex, myBalance, passes, S as State, useStore } from '@/lib/sto
 import { PersonLines, RightLabel, TotalCard } from '@/ui/balances';
 import { AppBar, Avatar, Button, Chevron, Empty, Fab, Hint, IconButton, Loading, Row, Screen, Title, Txt } from '@/ui/kit';
 import { openFriend } from '@/ui/nav';
+import { PushBanner } from '@/ui/push-ui';
 import { usePullToRefresh } from '@/ui/refresh';
 
 export default function FriendsTab(){
@@ -21,6 +22,7 @@ export default function FriendsTab(){
         <AppBar left={<IconButton icon="search" label="Search" onPress={() => router.push('/search')} />}
           right={<Button kind="ghost" small icon="user-plus" title="Add friends" onPress={() => router.push('/add-friend')} />} />
         <Title>Friends</Title>
+        <PushBanner />
         <Hint text={S.loadError} />
         {!friends.length ? <Empty title="Split with one friend" text="Paid for a friend’s coffee or a cab? Add them and keep track between just the two of you, no group needed."
           action={<Button kind="primary" icon="user-plus" title="Add a friend" onPress={() => router.push('/add-friend')} />} /> : <>

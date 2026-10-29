@@ -4,7 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { Platform, TextInput, View } from 'react-native';
 
-import { run, summaryText } from '@/lib/actions';
+import { canRemind, run, sendReminder, summaryText } from '@/lib/actions';
 import { CATEGORY_GROUPS, catOf } from '@/lib/categories';
 import { curOf, pairwise, payersOf, simplify, type Map } from '@/lib/money';
 import { avatarUrl, expOf, friendOf, friendsIndex, groupBalances, membersOf, myBalance, myId, nameOf, personName, S, titleOf, uid,
@@ -78,10 +78,19 @@ export default function GroupPage(){
         </View>
         <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: 8}}>
           <Chip primary title="Settle up" onPress={() => router.push({pathname: '/settle', params: {gid: g.id}})} />
+          {g.is_direct && f && canRemind(g.id, f.id) && Object.entries(mine).filter(([, v]) => v > 0).map(([cur, v]) =>
+            <Chip key={cur} icon="bell" title="Remind" onPress={() => sendReminder(g.id, f.id, v, cur)} />)}
           {!g.is_direct && <Chip title="Balances" on={t === 'balances'} onPress={() => setTab('balances')} />}
           <Chip title="Totals" on={t === 'insights'} onPress={() => setTab('insights')} />
           {!g.is_direct && <Chip title="Whiteboard" on={t === 'board'} onPress={() => setTab('board')} />}
+          {(!g.is_direct || (f && !f.user_id)) && <Chip icon="share-2" title="Invite" onPress={() => router.push({pathname: '/invite', params: {gid: g.id}})} />}
         </View>
+        {g.is_direct && f && !f.user_id && (
+          <View style={{flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: c.accent + '1a', borderRadius: 14, padding: 12, flexWrap: 'wrap'}}>
+            <Icon name="user-plus" size={18} color={c.accent} />
+            <Txt small style={{flex: 1, minWidth: 180}}>{personName(f)} won’t see these expenses or get notifications until they join. Send them an invite link.</Txt>
+            <Button small kind="primary" icon="share-2" title="Invite" onPress={() => router.push({pathname: '/invite', params: {gid: g.id}})} />
+          </View>)}
         {t !== 'expenses' && <LinkText small title="‹ Back to expenses" onPress={() => setTab('expenses')} />}
         {t === 'expenses' ? <Expenses g={g} me={me} /> : t === 'balances' ? <Balances g={g} /> : t === 'insights' ? <Insights g={g} /> : <Board g={g} />}
       </Screen>
@@ -145,6 +154,8 @@ function Balances({g}: {g: Group}){
                           {lines.map((x, j) => (
                             <View key={j} style={{flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}>
                               <Txt small style={{flex: 1, minWidth: 160}}>{nameOf(g.id, x.from)} {x.from === me ? 'owe' : 'owes'} {nameOf(g.id, x.to) === 'You' ? 'you' : nameOf(g.id, x.to)} <Txt small weight="bold" color={x.from === m.id ? c.owe : c.owed}>{fmt(x.amount, cur)}</Txt></Txt>
+                              {x.from === m.id && x.to === me && canRemind(g.id, x.from) && <Button small kind="ghost" icon="bell" title="Remind"
+                                onPress={() => sendReminder(g.id, x.from, x.amount, cur)} />}
                               {x.from === m.id && <Button small title="Settle up"
                                 onPress={() => router.push({pathname: '/settle', params: {gid: g.id, from: x.from, to: x.to, amt: String(x.amount), cur}})} />}
                             </View>

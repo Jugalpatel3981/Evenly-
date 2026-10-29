@@ -2,17 +2,19 @@
 import * as Clipboard from 'expo-clipboard';
 import * as WebBrowser from 'expo-web-browser';
 import { useState, type ReactNode } from 'react';
-import { Platform, View } from 'react-native';
+import { Platform, Pressable, View } from 'react-native';
 
 import { run } from '@/lib/actions';
+import { choosePhoto, publicUrl, upload } from '@/lib/photos';
 import { appUrl } from '@/lib/auth';
 import { friendly, loadAll, myName, myProfile, uid, useStore } from '@/lib/store';
 import { sb } from '@/lib/supabase';
 import { validEmail } from '@/lib/util';
-import { Select } from '@/ui/controls';
+import { Select, SwitchRow } from '@/ui/controls';
 import { Icon, type IconName } from '@/ui/icons';
 import { AppBar, Avatar, Button, Card, Field, H2, LinkText, Screen, Seg, Title, Txt } from '@/ui/kit';
 import { CURRENCY_OPTIONS } from '@/ui/options';
+import { PushRow } from '@/ui/push-ui';
 import { setThemePref, useTheme, useThemePref, type ThemePref } from '@/ui/theme';
 import { toast } from '@/ui/toast';
 
@@ -36,6 +38,7 @@ function Inline({children, button}: {children: ReactNode; button: ReactNode}){
 
 export default function AccountTab(){
   const S = useStore();
+  const {c} = useTheme();
   const pref = useThemePref();
   const p = myProfile() || ({} as Record<string, any>);
   const [name, setName] = useState<string | null>(null);
@@ -44,6 +47,14 @@ export default function AccountTab(){
   const [busy, setBusy] = useState<string | null>(null);
   const site = Platform.OS === 'web' ? window.location.origin : SITE;
 
+  const changePhoto = async () => {
+    try {
+      const photo = await choosePhoto(480, 'Profile photo'); if (!photo) return;
+      toast('Uploading photo…');
+      const path = await upload('avatars', `${uid()}/avatar-${Date.now()}.jpg`, photo);
+      await run(sb.from('profiles').upsert({id: uid(), name: myName(), avatar_url: publicUrl('avatars', path)}, {onConflict: 'id'}), 'Photo updated');
+    } catch (err) { toast(friendly(err)); }
+  };
   const saveName = async () => {
     const n = (name ?? myName()).trim();
     if (!n) return toast('Enter your name.');
@@ -99,8 +110,13 @@ export default function AccountTab(){
       <Title>Account</Title>
       <Section>
         <View style={{flexDirection: 'row', alignItems: 'center', gap: 14}}>
-          <Avatar name={myName()} url={p.avatar_url} size={72} />
-          <View style={{flex: 1}}><Txt weight="bold" style={{fontSize: 18}}>{myName()}</Txt><Txt muted selectable>{S.session?.user?.email}</Txt></View>
+          <Pressable onPress={changePhoto} accessibilityRole="button" accessibilityLabel="Change photo">
+            <Avatar name={myName()} url={p.avatar_url} size={72} />
+            <View style={{position: 'absolute', right: -2, bottom: -2, width: 28, height: 28, borderRadius: 14, backgroundColor: c.accent, borderWidth: 2, borderColor: c.surface,
+              alignItems: 'center', justifyContent: 'center'}}><Icon name="camera" size={14} color={c.accentInk} /></View>
+          </Pressable>
+          <View style={{flex: 1}}><Txt weight="bold" style={{fontSize: 18}}>{myName()}</Txt><Txt muted selectable>{S.session?.user?.email}</Txt>
+            {!!p.avatar_url && <LinkText small title="Remove photo" onPress={() => run(sb.from('profiles').update({avatar_url: null}).eq('id', uid()), 'Photo removed')} />}</View>
         </View>
         <Inline button={<Button title="Save" onPress={saveName} busy={busy === 'name'} />}>
           <Field label="Your name" value={name ?? myName()} onChangeText={setName} maxLength={40} autoComplete="name" />
@@ -110,6 +126,12 @@ export default function AccountTab(){
       <Section title="Appearance" icon={themeIcon}>
         <Seg<ThemePref> value={pref} onChange={setThemePref} options={[['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]} />
         <Txt small muted>System follows your phone’s light or dark setting. Saved on this device.</Txt>
+      </Section>
+      <Section title="Notifications" icon="bell">
+        <PushRow />
+        <SwitchRow value={p.notify_email !== false} title="Email notifications"
+          sub="An email when someone adds, changes or deletes an expense you’re in, comments, or reminds you."
+          onChange={v => run(sb.from('profiles').upsert({id: uid(), name: myName(), notify_email: v}, {onConflict: 'id'}), v ? 'Email notifications on' : 'Email notifications off')} />
       </Section>
       <Section title="How friends can pay you" icon="wallet">
         <Txt small muted>Friends who owe you see a pay button when they settle up. Leave blank anything you don’t use.</Txt>

@@ -5,6 +5,7 @@ import { View } from 'react-native';
 import { expOf, groupList, myBalance, passes, useStore } from '@/lib/store';
 import { GroupLines, RightLabel, TotalCard } from '@/ui/balances';
 import { AppBar, Button, Chevron, Empty, Fab, GroupAvatar, Hint, IconButton, Loading, Row, Screen, Title, Txt } from '@/ui/kit';
+import { PushBanner } from '@/ui/push-ui';
 import { usePullToRefresh } from '@/ui/refresh';
 
 export default function GroupsTab(){
@@ -19,6 +20,7 @@ export default function GroupsTab(){
         <AppBar left={<IconButton icon="search" label="Search" onPress={() => router.push('/search')} />}
           right={<Button kind="ghost" small icon="users" title="Create group" onPress={() => router.push('/group-form')} />} />
         <Title>Groups</Title>
+        <PushBanner />
         <Hint text={S.loadError} />
         {!groups.length ? <Empty title="Split with a group" text="Make a group for a trip, your flat or a dinner. Everyone you add sees the same expenses and balances."
           action={<Button kind="primary" icon="plus" title="Create a group" onPress={() => router.push('/group-form')} />} /> : <>

@@ -8,7 +8,7 @@ import { friendOf, loadAll, myBalance, S, uid, useStore } from '@/lib/store';
 import { sb } from '@/lib/supabase';
 import { validEmail } from '@/lib/util';
 import { ConfirmButton, FormBar, Select } from '@/ui/controls';
-import { Field, Txt } from '@/ui/kit';
+import { Button, Field, Txt } from '@/ui/kit';
 import { CURRENCY_OPTIONS } from '@/ui/options';
 import { useTheme } from '@/ui/theme';
 import { toast } from '@/ui/toast';
@@ -60,6 +60,7 @@ function Form({gid}: {gid: string}){
         <Field label="Their email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" placeholder="rahul@example.com" editable={!f?.user_id} />
         <Txt small muted>{f?.user_id ? 'They’re on Evenly and see everything you share.' : 'Their email connects you. If they’re already on Evenly they see your expenses straight away and get notified. If not, everything appears when they sign up with this email.'}</Txt>
         <Select label="Default currency" value={cur} options={CURRENCY_OPTIONS} search onChange={setCur} />
+        {!f?.user_id && <Button icon="qr-code" title={`Invite link for ${f?.name || 'them'}`} onPress={() => router.push({pathname: '/invite', params: {gid}})} />}
         {!!hint && <Txt small color={c.owe}>{hint}</Txt>}
         <ConfirmButton title="Remove friend" disabled={!settled} onConfirm={remove} style={{alignSelf: 'flex-start'}} />
         {!settled && <Txt small muted>You can remove a friend once you’re settled up.</Txt>}

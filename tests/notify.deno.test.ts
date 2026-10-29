@@ -1,5 +1,5 @@
 // Run with: EVENLY_TEST=1 deno test -A tests/notify.deno.test.ts
-import { message, money, emailHtml, handler } from "../supabase/functions/notify/index.ts";
+import { message, money, emailHtml, handler, sendExpo } from "../supabase/functions/notify/index.ts";
 import webpush from "npm:web-push@3.6.7";
 
 const assert = (c: unknown, msg: string) => { if (!c) throw new Error(msg); };
@@ -94,4 +94,17 @@ Deno.test("full delivery: claims once, looks up the person, emails them, respect
     const r3 = await call();
     assert(!("email" in r3) && sent.length === 1, "email off must not send: " + JSON.stringify(r3));
   } finally { globalThis.fetch = real; }
+});
+
+Deno.test("app notifications go to Expo, and unregistered phones are reported", async () => {
+  let sent: any = null;
+  const fake = (async (_url: string, init: RequestInit) => {
+    sent = JSON.parse(String(init.body));
+    return new Response(JSON.stringify({ data: [{ status: "ok" }, { status: "error", details: { error: "DeviceNotRegistered" } }] }));
+  }) as unknown as typeof fetch;
+  const m = message({ ...base, kind: "expense_added", data: { actor: "Asha", group: "Goa", description: "Dinner", amount: 90000, net: -30000 } });
+  const r = await sendExpo(["ExponentPushToken[a]", "ExponentPushToken[b]"], m, fake);
+  assert(r.sent === 1 && r.gone.length === 1 && r.gone[0] === "ExponentPushToken[b]", JSON.stringify(r));
+  assert(sent[0].to === "ExponentPushToken[a]" && sent[0].title === m.title && sent[0].data.url.endsWith("#open-e1") && sent[0].channelId === "default", JSON.stringify(sent[0]));
+  assert((await sendExpo([], m, fake)).sent === 0, "no tokens, no call");
 });

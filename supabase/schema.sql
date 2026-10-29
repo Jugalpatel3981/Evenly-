@@ -982,6 +982,20 @@ alter table public.profiles add column if not exists budgets jsonb not null defa
 alter table public.profiles drop constraint if exists profiles_budgets_check;
 alter table public.profiles add constraint profiles_budgets_check check (jsonb_typeof(budgets) = 'object');
 
+-- ============================================================================
+-- The Android and iPhone app: one Expo push token per phone, so the notify function can reach it.
+create table if not exists public.push_tokens (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  token       text not null unique,
+  platform    text,
+  created_at  timestamptz not null default now()
+);
+alter table public.push_tokens enable row level security;
+drop policy if exists "own push tokens" on public.push_tokens;
+create policy "own push tokens" on public.push_tokens for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+grant select, insert, delete on public.push_tokens to authenticated;
+
 -- ---------- live updates ----------
 do $$
 declare t text;

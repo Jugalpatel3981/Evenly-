@@ -4,6 +4,7 @@ import { KeyboardAvoidingView, Platform, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 
 import { appUrl, signInWithGoogle, takeOAuthError } from '@/lib/auth';
+import { pendingInvite } from '@/lib/pending';
 import { friendly } from '@/lib/store';
 import { sb } from '@/lib/supabase';
 import { validEmail } from '@/lib/util';
@@ -66,6 +67,10 @@ export default function SignIn(){
             </View>
             <Txt style={{fontFamily: F.displayBlack, fontSize: 26, lineHeight: 32}}>Evenly</Txt>
           </View>
+          {!!pendingInvite() && (
+            <View style={{backgroundColor: c.accent + '1a', borderRadius: 14, padding: 12}}>
+              <Txt small>You’ve been invited to split expenses on Evenly. Sign in or create an account to join.</Txt>
+            </View>)}
           <Card style={{gap: 14}}>
             <Title style={{fontSize: 28, lineHeight: 34}}>{title}</Title>
             <Txt muted>{sub}</Txt>

@@ -1,11 +1,13 @@
 // New group, or group settings: name, type, currency, simplify debts, default split, people, leave or delete.
+import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View } from 'react-native';
 
 import { defaultSummary, MODE_WORDS, run, usedMembers } from '@/lib/actions';
 import { GROUP_TYPES } from '@/lib/categories';
-import { avatarUrl, defaultCurrency, loadAll, member, membersOf, myBalance, myName, personName, S, uid, useStore, type Member } from '@/lib/store';
+import { choosePhoto, publicUrl, upload } from '@/lib/photos';
+import { avatarUrl, defaultCurrency, friendly, loadAll, member, membersOf, myBalance, myName, personName, S, uid, useStore, type Member } from '@/lib/store';
 import { sb } from '@/lib/supabase';
 import { ConfirmButton, FormBar, Select, SwitchRow } from '@/ui/controls';
 import { Icon } from '@/ui/icons';
@@ -78,6 +80,15 @@ function Form({gid}: {gid?: string}){
   }
   const leave = async () => { if (await run(sb.rpc('leave_group', {p_group: g!.id}), `You left ${g!.name}`)) router.replace('/'); };
   const del = async () => { if (await run(sb.from('groups').delete().eq('id', g!.id), 'Group deleted')) router.replace('/'); };
+  const changeCover = async () => {
+    try {
+      const photo = await choosePhoto(1400, 'Cover photo'); if (!photo) return;
+      toast('Uploading photo…');
+      const path = await upload('covers', `${g!.id}/cover-${Date.now()}.jpg`, photo);
+      if (await run(sb.from('groups').update({cover_url: publicUrl('covers', path)}).eq('id', g!.id), 'Cover photo updated')) router.back();
+    } catch (err) { toast(friendly(err)); }
+  };
+  const removeCover = async () => { if (await run(sb.from('groups').update({cover_url: null}).eq('id', g!.id), 'Cover photo removed')) router.back(); };
   const clearDefault = async () => { if (await run(sb.from('groups').update({default_split: null}).eq('id', g!.id), 'Default split cleared')) router.back(); };
 
   const rowStyle = {flexDirection: 'row' as const, alignItems: 'center' as const, gap: 10, paddingVertical: 8, paddingHorizontal: 12, minHeight: 56};
@@ -98,6 +109,17 @@ function Form({gid}: {gid?: string}){
         </View>
         <Select label="Default currency" value={cur} options={CURRENCY_OPTIONS} search onChange={setCur} />
         {g && <SwitchRow value={simplifyOn} onChange={setSimplify} title="Simplify debts" sub="Combine debts so everyone settles with as few payments as possible." />}
+        {g && (
+          <View style={{gap: 6}}>
+            <Txt weight="semi" small muted>Cover photo</Txt>
+            <View style={{flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap'}}>
+              {g.cover_url ? <Image source={{uri: g.cover_url}} style={{width: 120, height: 64, borderRadius: 10}} contentFit="cover" accessibilityLabel="Cover photo" />
+                : <Txt small muted>No photo yet</Txt>}
+              <Button small icon="image" title={g.cover_url ? 'Change' : 'Add photo'} onPress={changeCover} />
+              {!!g.cover_url && <Button small kind="ghost" title="Remove" onPress={removeCover} />}
+            </View>
+          </View>)}
+        {g && <Button icon="qr-code" title="Invite link and QR code" onPress={() => router.push({pathname: '/invite', params: {gid: g.id}})} />}
         {g?.default_split?.mode && (
           <View style={{flexDirection: 'row', alignItems: 'center', gap: 12}}>
             <View style={{flex: 1}}><Txt weight="semi">Default split</Txt>

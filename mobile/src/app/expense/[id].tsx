@@ -1,8 +1,9 @@
 // Expense details: who paid and who owes, notes, a three-month category chart, and one thread of comments and changes.
 import * as Crypto from 'expo-crypto';
+import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, TextInput, View } from 'react-native';
 
 import { changes, REPEATS, run, whoDid } from '@/lib/actions';
 import { catOf, GROUP_TYPES } from '@/lib/categories';
@@ -102,6 +103,7 @@ function Detail({e, g}: {e: ExpenseRow; g: Group}){
             {created && <Txt small muted>Added by {youLower(whoDid(g.id, created.actor))} on {niceDate(created.created_at.slice(0, 10))}</Txt>}
             {updated && <Txt small muted>Last updated by {youLower(whoDid(g.id, updated.actor))} on {niceDate(updated.created_at.slice(0, 10))}</Txt>}
           </View>
+          {!!e.receipt_path && <ReceiptThumb path={e.receipt_path} />}
         </View>
         {!!e.repeat && e.repeat !== 'never' && (
           <View style={{flexDirection: 'row', gap: 8, alignItems: 'center', backgroundColor: c.accent + '1a', borderRadius: 12, padding: 12}}>
@@ -179,5 +181,23 @@ function CategoryChart({g, e, cur}: {g: Group; e: ExpenseRow; cur: string}){
         </View>
       ))}
     </View>
+  );
+}
+
+// The receipt photo, from private storage through a link that works for an hour. Tap to see it full size.
+function ReceiptThumb({path}: {path: string}){
+  const {c} = useTheme();
+  const [url, setUrl] = useState<string | null>(null), [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let live = true;
+    sb.storage.from('receipts').createSignedUrl(path, 3600).then(({data, error}) => { if (!live) return; if (error) setFailed(true); else setUrl(data.signedUrl); });
+    return () => { live = false; };
+  }, [path]);
+  const open = () => { if (!url) return; if (Platform.OS === 'web') window.open(url, '_blank'); else Linking.openURL(url); };
+  return (
+    <Pressable onPress={open} accessibilityRole="button" accessibilityLabel={failed ? 'Couldn’t load the receipt.' : 'Open receipt'}
+      style={{width: 64, height: 80, borderRadius: 10, borderWidth: 1, borderColor: c.line, backgroundColor: c.surface, overflow: 'hidden', alignItems: 'center', justifyContent: 'center'}}>
+      {url ? <Image source={{uri: url}} style={{width: 64, height: 80}} contentFit="cover" accessibilityLabel="Receipt photo" /> : <Icon name="receipt" size={20} color={c.muted} />}
+    </Pressable>
   );
 }

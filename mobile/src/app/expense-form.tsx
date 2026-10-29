@@ -8,14 +8,16 @@ import { KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View 
 import { MODE_WORDS, REPEATS, run } from '@/lib/actions';
 import { guessCategory, GROUP_TYPES } from '@/lib/categories';
 import { computePayers, curOf } from '@/lib/money';
-import { avatarUrl, friendOf, membersOf, myId, nameOf, S, titleOf, useStore } from '@/lib/store';
+import { choosePhoto, upload, type Photo } from '@/lib/photos';
+import { avatarUrl, friendly, friendOf, membersOf, myId, nameOf, S, titleOf, useStore } from '@/lib/store';
 import { sb } from '@/lib/supabase';
 import { curSymbol, fmt, fromMinor, today, toMinor } from '@/lib/util';
 import { ConfirmButton, FormBar, Select, SwitchRow, Tool } from '@/ui/controls';
 import { DateTool } from '@/ui/date-picker';
 import { CATEGORY_OPTIONS, CURRENCY_OPTIONS, dayLabel } from '@/ui/options';
 import { Icon } from '@/ui/icons';
-import { Avatar, Button, CatIcon, Field, LineInput, noOutline, Txt } from '@/ui/kit';
+import { Avatar, Button, CatIcon, Field, LineInput, LinkText, noOutline, Txt } from '@/ui/kit';
+import { toast } from '@/ui/toast';
 import { computeFor, initialSplit, SplitEditor, splitInput, type SplitState } from '@/ui/split-editor';
 import { F, useTheme } from '@/ui/theme';
 
@@ -55,6 +57,7 @@ function Form({gid, eid}: {gid: string; eid?: string}){
   const [repeat, setRepeat] = useState(e?.repeat || 'never');
   const [notes, setNotes] = useState(e?.notes || '');
   const [notesOpen, setNotesOpen] = useState(!!e?.notes);
+  const [receipt, setReceipt] = useState<{photo: Photo | null; removed: boolean}>({photo: null, removed: false});
   const [hint, setHint] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -85,8 +88,15 @@ function Form({gid, eid}: {gid: string; eid?: string}){
       split: r.split, split_mode: split.mode, split_input: splitInput(split), category: cat, date: date || today(),
       currency: cur, notes: notes.trim(), repeat};
     setBusy(true);
-    const ok = e ? await run(sb.from('expenses').update(row).eq('id', e.id), 'Expense updated')
-                 : await run(sb.from('expenses').insert({...row, id: Crypto.randomUUID()}), 'Expense added');
+    const id = e ? e.id : Crypto.randomUUID();
+    const full: Record<string, unknown> = {...row};
+    if (receipt.photo) {
+      try { full.receipt_path = await upload('receipts', `${g.id}/${id}-${Date.now()}.jpg`, receipt.photo); }
+      catch (err) { setBusy(false); toast(friendly(err)); return; }
+    } else if (receipt.removed) full.receipt_path = null;
+    const ok = e ? await run(sb.from('expenses').update(full).eq('id', e.id), 'Expense updated')
+                 : await run(sb.from('expenses').insert({...full, id}), 'Expense added');
+    if (ok && e?.receipt_path && (receipt.photo || receipt.removed)) sb.storage.from('receipts').remove([e.receipt_path]);
     // Remember (or forget) this split as the group's default.
     const wantDefault = useDefault && split.mode !== 'items';
     if (ok && wantDefault) {
@@ -167,6 +177,13 @@ function Form({gid, eid}: {gid: string; eid?: string}){
         {!!hint && <Txt small color={c.owe}>{hint}</Txt>}
         {notesOpen && <Field label="Notes" value={notes} onChangeText={setNotes} multiline maxLength={1000} placeholder="What it covered, who booked it…"
           style={{minHeight: 80, textAlignVertical: 'top', paddingTop: 10}} autoFocus={!e?.notes} />}
+        {(receipt.photo || receipt.removed || e?.receipt_path) && (
+          <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
+            <Icon name="paperclip" size={13} color={c.muted} />
+            {receipt.photo ? <Txt small muted>A receipt photo will be attached when you save. <LinkText small title="Remove" onPress={() => setReceipt({photo: null, removed: false})} /></Txt>
+              : receipt.removed ? <Txt small muted>The receipt will be removed when you save.</Txt>
+              : <Txt small muted>A receipt is attached. <LinkText small title="Remove" onPress={() => setReceipt({photo: null, removed: true})} /></Txt>}
+          </View>)}
         {e && <ConfirmButton title="Delete expense" onConfirm={remove} style={{alignSelf: 'flex-start'}} />}
       </ScrollView>
       <View style={{flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: c.line, backgroundColor: c.surface, paddingHorizontal: 8, paddingVertical: 4}}>
@@ -176,6 +193,9 @@ function Form({gid, eid}: {gid: string; eid?: string}){
             {open => <Tool icon="repeat" label={repeat === 'never' ? 'Once' : REPEATS.find(r => r[0] === repeat)![1]} onPress={open} accessibilityLabel="Repeats" />}
           </Select>
           <View style={{flex: 1}} />
+          <Tool icon="camera" iconOnly accessibilityLabel="Receipt photo" onPress={async () => {
+            try { const photo = await choosePhoto(1800, 'Receipt photo'); if (photo) setReceipt({photo, removed: false}); } catch (err) { toast(friendly(err)); }
+          }} />
           <Tool icon="notebook-pen" iconOnly onPress={() => setNotesOpen(true)} accessibilityLabel="Notes" />
         </View>
       </View>

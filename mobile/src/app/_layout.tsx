@@ -11,7 +11,10 @@ import { useEffect, useState } from 'react';
 import { boot, emit, S, teardown } from '@/lib/store';
 import { sb } from '@/lib/supabase';
 import { useTheme } from '@/ui/theme';
+import { Targets } from '@/ui/targets';
 import { ToastHost } from '@/ui/toast';
+// Notification taps and the service worker are set up as soon as the app starts.
+import '@/lib/push';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -48,7 +51,7 @@ export default function Root(){
           <Stack.Screen name="friend/[key]" />
           <Stack.Screen name="expense/[id]" />
           {/* Forms slide up over the page they were opened from. */}
-          {['expense-form', 'settle', 'group-form', 'friend-form', 'add-friend', 'search', 'pick', 'multi', 'deleted', 'filter'].map(n =>
+          {['expense-form', 'settle', 'group-form', 'friend-form', 'add-friend', 'search', 'pick', 'multi', 'deleted', 'filter', 'invite', 'join'].map(n =>
             <Stack.Screen key={n} name={n} options={{presentation: 'fullScreenModal', animation: 'slide_from_bottom'}} />)}
         </Stack.Protected>
         <Stack.Protected guard={!session} redirectTo="/">
@@ -56,6 +59,7 @@ export default function Root(){
         </Stack.Protected>
         <Stack.Screen name="auth" />
       </Stack>
+      {session && <Targets />}
       <ToastHost />
     </ThemeProvider>
   );

@@ -3,7 +3,7 @@
 // It sends a phone notification to each of the person's devices and an email, then marks it delivered.
 //
 // Secrets (Supabase > Edge Functions > Secrets):
-//   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY   phone notifications
+//   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY   phone notifications on the website (the Android/iPhone app needs no key)
 //   BREVO_API_KEY + MAIL_FROM             email through Brevo (or RESEND_API_KEY + MAIL_FROM through Resend)
 //   APP_URL                               your site, e.g. https://evenly-tracker.netlify.app
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by Supabase automatically.
@@ -120,6 +120,21 @@ async function sendEmail(to: string, m: { title: string; body: string; url: stri
   return "no email provider";
 }
 
+// The Android and iPhone app: send through Expo's push service. Returns how many went out, and the tokens
+// Expo says are no longer registered (the app was removed), so they can be forgotten.
+export async function sendExpo(tokens: string[], m: { title: string; body: string; url: string; tag: string }, doFetch: typeof fetch = fetch) {
+  if (!tokens.length) return { sent: 0, gone: [] as string[] };
+  const r = await doFetch("https://exp.host/--/api/v2/push/send", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(tokens.map((to) => ({ to, title: m.title, body: m.body, data: { url: m.url }, sound: "default", channelId: "default" }))),
+  });
+  if (!r.ok) return { sent: 0, gone: [] as string[], error: `expo ${r.status}` };
+  const out = (await r.json())?.data || [];
+  const gone = tokens.filter((_, i) => out[i]?.details?.error === "DeviceNotRegistered");
+  return { sent: out.filter((x: any) => x?.status === "ok").length, gone };
+}
+
 export async function handler(req: Request): Promise<Response> {
   const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json" } });
   // A quick status page: which settings are in place (never their values).
@@ -169,6 +184,12 @@ export async function handler(req: Request): Promise<Response> {
       }
     }
     result.push = sent;
+  }
+  if (wantPush && n.user_id) {
+    const { data: rows } = await sb.from("push_tokens").select("token").eq("user_id", n.user_id);
+    const r = await sendExpo((rows || []).map((x: { token: string }) => x.token), m);
+    if (r.gone.length) await sb.from("push_tokens").delete().in("token", r.gone);
+    result.app = r.sent;
   }
   if (wantEmail && email) result.email = await sendEmail(email, m, !!n.user_id);
   return json(result);

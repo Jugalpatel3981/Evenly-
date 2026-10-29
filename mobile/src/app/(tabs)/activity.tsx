@@ -10,6 +10,7 @@ import { emit, unreadCount, useStore } from '@/lib/store';
 import { sb } from '@/lib/supabase';
 import { ago } from '@/lib/util';
 import { AppBar, Button, CatIcon, Empty, Fab, IconButton, Loading, Row, Screen, Seg, Title, Txt } from '@/ui/kit';
+import { PushBanner } from '@/ui/push-ui';
 import { usePullToRefresh } from '@/ui/refresh';
 import { useTheme } from '@/ui/theme';
 
@@ -36,6 +37,7 @@ export default function ActivityTab(){
     <Screen refresh={refresh}>
       <AppBar left={<IconButton icon="search" label="Search" onPress={() => router.push('/search')} />} />
       <Title>Activity</Title>
+      <PushBanner />
       <Seg value={tab} onChange={setTab} options={[['all', 'All activity'], ['foryou', n ? `For you (${n})` : 'For you']]} />
       {tab === 'all' ? (feed.length ? <View>{feed.map(({a, parts}) => {
         const ic = activityIcon(a), impact = activityImpact(a);

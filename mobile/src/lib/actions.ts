@@ -94,3 +94,11 @@ export function summaryText(g: Group, transfers: Record<string, {from: string; t
 }
 
 export { loadAll };
+
+/* ---------- reminders ---------- */
+// Can Evenly reach this member? Only people with an account or an email address.
+export function canRemind(gid: string, mid: string){ const m = membersOf(gid).find(x => x.id === mid); return !!(m && (m.user_id || m.email)); }
+export async function sendReminder(gid: string, mid: string, amount: number, cur: string){
+  const ok = await run(sb.rpc('send_reminder', {p_group: gid, p_member: mid, p_amount: Number(amount), p_currency: cur}));
+  if (ok) toast(`Reminder sent to ${nameOf(gid, mid)}`);
+}
