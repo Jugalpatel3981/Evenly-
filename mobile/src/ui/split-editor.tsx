@@ -7,7 +7,7 @@ import { computeSplit, type SplitResult } from '@/lib/money';
 import { fmt, toMinor } from '@/lib/util';
 
 import { Icon } from './icons';
-import { Button, Txt } from './kit';
+import { Button, noOutline, Txt } from './kit';
 import { F, useTheme } from './theme';
 
 export type Person = {id: string; name: string};
@@ -47,7 +47,7 @@ export function SplitEditor({people, st, set, result, cur}: {people: Person[]; s
   const items = st.inputs.items.list;
   const setItems = (list: Item[]) => set({...st, inputs: {...st.inputs, items: {list}}});
   const field = {fontFamily: F.medium, fontSize: 16, color: c.ink, backgroundColor: c.surface, borderWidth: 1, borderColor: c.line, borderRadius: 10,
-    paddingHorizontal: 10, minHeight: 40} as const;
+    paddingHorizontal: 10, minHeight: 40, ...noOutline} as const;
 
   const rowBox = {flexDirection: 'row' as const, alignItems: 'center' as const, gap: 10, paddingVertical: 8, paddingHorizontal: 12, minHeight: 52};
   const Check = ({on}: {on: boolean}) => (
@@ -64,7 +64,7 @@ export function SplitEditor({people, st, set, result, cur}: {people: Person[]; s
         <View key={i} style={{padding: 12, gap: 8, borderBottomWidth: 1, borderBottomColor: c.line}}>
           <View style={{flexDirection: 'row', gap: 8, alignItems: 'center'}}>
             <TextInput value={it.name} placeholder={`Item ${i + 1}`} placeholderTextColor={c.muted} maxLength={60} accessibilityLabel="Item name"
-              onChangeText={v => setItems(items.map((x, j) => j === i ? {...x, name: v} : x))} style={[field, {flex: 1}]} />
+              onChangeText={v => setItems(items.map((x, j) => j === i ? {...x, name: v} : x))} style={[field, {flex: 1, minWidth: 0}]} />
             <TextInput value={it.amount} placeholder="0.00" placeholderTextColor={c.muted} keyboardType="decimal-pad" accessibilityLabel="Item price"
               onChangeText={v => setItems(items.map((x, j) => j === i ? {...x, amount: v} : x))} style={[field, {width: 96, textAlign: 'right'}]} />
             <Pressable accessibilityRole="button" accessibilityLabel="Remove item" hitSlop={6} style={{padding: 6}}
