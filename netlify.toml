@@ -1,37 +1,43 @@
-# Netlify deploys this repo as-is: no build step.
+# Netlify builds the Evenly app in mobile/ (Expo, React Native for web) and publishes the result.
 [build]
-  publish = "."
+  base = "mobile"
+  command = "npx expo export --platform web"
+  publish = "dist"
 
-# Always fetch the latest app code, so updates reach everyone on their next open.
+[build.environment]
+  NODE_VERSION = "22"
+  # Build from what's in the repository; don't check Expo's servers for newer versions.
+  EXPO_OFFLINE = "1"
+  EXPO_NO_TELEMETRY = "1"
+
 [[headers]]
   for = "/*"
   [headers.values]
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
 
+# The page and the service worker: always check for a newer version, so updates reach everyone on their next open.
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache"
 [[headers]]
   for = "/sw.js"
   [headers.values]
     Cache-Control = "no-cache"
-
 [[headers]]
-  for = "/*.js"
+  for = "/manifest.webmanifest"
   [headers.values]
     Cache-Control = "no-cache"
 
+# Built files have the content's fingerprint in their name, so they never change.
 [[headers]]
-  for = "/*.css"
+  for = "/_expo/*"
   [headers.values]
-    Cache-Control = "no-cache"
+    Cache-Control = "public, max-age=31536000, immutable"
 
-[[headers]]
-  for = "/js/*"
-  [headers.values]
-    Cache-Control = "no-cache"
-
-# The React Native app's source lives in mobile/; it isn't part of the website.
+# Every app address (/group/…, /expense/…, /account) is served by the one page.
 [[redirects]]
-  from = "/mobile/*"
-  to = "/404"
-  status = 404
-  force = true
+  from = "/*"
+  to = "/index.html"
+  status = 200
