@@ -18,7 +18,13 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "app.evenly.tracker"
+      "package": "app.evenly.tracker",
+      "permissions": [
+        "CAMERA"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "single",
@@ -39,10 +45,26 @@
         }
       ],
       "@react-native-community/datetimepicker",
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Evenly uses your photos for receipts, your profile picture and group covers.",
+          "cameraPermission": "Evenly uses the camera to photograph receipts and take a profile picture.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#0e6650",
+          "defaultChannel": "default"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "description": "Split bills with friends: groups, shared expenses, balances and settle-up."
   }
 }

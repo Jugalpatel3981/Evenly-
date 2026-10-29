@@ -1,0 +1,47 @@
+# Builds the Evenly Android app with Expo (EAS Build). Run it from GitHub: Actions > Build Android app > Run workflow.
+# Needs one repository secret, EXPO_TOKEN: an access token from expo.dev (Account settings > Access tokens).
+name: Build Android app
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "preview = an .apk to install on your phone; production = an .aab for the Play Store"
+        type: choice
+        options: [preview, production]
+        default: preview
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Check the token is set
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: test -n "$EXPO_TOKEN" || (echo "Add the EXPO_TOKEN secret first (Settings > Secrets and variables > Actions)." && exit 1)
+      - name: Link the Expo project
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        # app.json carries the project id once it's set; before that, find or create the "evenly" project on your account.
+        run: |
+          node -e "process.exit(require('./app.json').expo.extra?.eas?.projectId ? 0 : 1)" || npx eas-cli@latest init --non-interactive --force
+      - name: Build on Expo
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npx eas-cli@latest build --platform android --profile ${{ inputs.profile }} --non-interactive --json > build.json
+          url=$(node -e "const b=require('./build.json')[0]; console.log(b?.artifacts?.buildUrl || b?.artifacts?.applicationArchiveUrl || '')")
+          echo "### Evenly Android app is ready" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Download: $url" >> $GITHUB_STEP_SUMMARY
+          echo "- Or open expo.dev, choose the evenly project, then Builds, for a QR code to install it on your phone." >> $GITHUB_STEP_SUMMARY

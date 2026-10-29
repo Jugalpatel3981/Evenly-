@@ -32,7 +32,17 @@ payments to settle up.
 - Live updates on every device; installable on phones
 
 Everything runs on free tiers: **Supabase** for accounts and the database,
-plus any static host for the website.
+**Netlify** for the website, and **Expo** to build the Android app.
+
+## Where things are
+
+- `mobile/`: the app, built with Expo and React Native. The same code is the website (Netlify builds it,
+  see `netlify.toml`) and the Android and iPhone app (`.github/workflows/android.yml` builds it on Expo).
+  See `mobile/README.md`.
+- `supabase/`: the database (`schema.sql`, safe to run again after every update) and the `notify` function
+  that sends phone notifications and emails.
+- `index.html`, `js/`, `styles.css`, `sw.js`, `vendor/`: the first, plain-JavaScript version of the website,
+  kept for reference. `tests/` holds its money tests and the `notify` function's tests.
 
 ## Setup (about 10 minutes, free)
 
