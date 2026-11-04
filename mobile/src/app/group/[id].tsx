@@ -26,10 +26,12 @@ const APP_URL = 'https://evenly-tracker.netlify.app/';
 
 // The coloured band at the top, with back and settings buttons.
 export function Banner({g, back, onSettings}: {g?: Group | null; back: string; onSettings?: () => void}){
-  const {c} = useTheme();
+  const {c, isDark} = useTheme();
   const tint = !g ? c.accent : {trip: c.cat.transport, home: c.cat.home, couple: c.cat.life}[g.type || ''] || c.accent;
   return (
     <View style={{height: 124, marginHorizontal: -16, marginTop: -8, backgroundColor: tint, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', padding: 8}}>
+      {/* Dark mode's colours are light: dim the band so the white buttons stand out. */}
+      {isDark && <View pointerEvents="none" style={{position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.45)'}} />}
       <IconButton icon="chevron-left" label={`Back to ${back}`} color="#fff" size={24} onPress={() => router.canGoBack() ? router.back() : router.replace('/')} />
       {onSettings && <IconButton icon="settings" label="Settings" color="#fff" onPress={onSettings} />}
     </View>
