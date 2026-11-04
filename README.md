@@ -1,141 +1,158 @@
 # Evenly
 
-A free Splitwise-style app. Friends make accounts and add shared expenses to
-groups. Evenly keeps a live tally of who owes whom and works out the fewest
-payments to settle up.
+**Evenly is a free mobile and web app that tracks shared expenses, IOUs and running balances among
+roommates, friends, couples and travel groups.** Add a bill, choose how to split it, and Evenly keeps a
+live tally of who owes whom, then works out the fewest payments to settle up.
+
+**Try it:** <https://evenly-tracker.netlify.app>. It works in any browser, installs on your phone's Home
+Screen, and is also available as an Android app.
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/groups.png" width="220" alt="Groups, with the total balance and what each person owes you"><br><sub>Your groups and balances</sub></td>
+    <td align="center"><img src="docs/screenshots/group.png" width="220" alt="A trip group's expenses, with who lent and who borrowed"><br><sub>A group's expenses</sub></td>
+    <td align="center"><img src="docs/screenshots/split-by-items.png" width="220" alt="Adding an expense split item by item"><br><sub>Split by items</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/details.png" width="220" alt="Expense details with who paid, who owes, and comments"><br><sub>Details and comments</sub></td>
+    <td align="center"><img src="docs/screenshots/balances.png" width="220" alt="Group balances with suggested payments"><br><sub>Balances</sub></td>
+    <td align="center"><img src="docs/screenshots/settle-up.png" width="220" alt="Settling up, with a Pay with UPI button"><br><sub>Settle up, pay with UPI</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/spending.png" width="220" alt="Monthly spending chart and category budgets"><br><sub>Spending and budgets</sub></td>
+    <td align="center"><img src="docs/screenshots/activity.png" width="220" alt="Activity feed of everything that happened"><br><sub>Activity</sub></td>
+    <td align="center"><img src="docs/screenshots/dark-mode.png" width="220" alt="A home group in dark mode"><br><sub>Dark mode</sub></td>
+  </tr>
+</table>
+
+## Features
 
 **Splitting**
-- Friends (one-to-one, no group needed) and groups (trip, home, couple, other)
-- Split equally, by exact amounts, percentages, shares, or equally with +/− adjustments
-- Several people paying for one expense
-- One bill with several friends, outside any group
-- Any currency, per expense; balances are kept per currency
-- Recurring expenses: weekly, every 2 weeks, monthly, yearly
+- One-to-one with a friend, or in a group (trip, home, couple, other)
+- Split equally, by exact amounts, percentages or shares, equally with +/− adjustments, or item by item
+  (tax and tip shared in proportion)
+- Several people paying for one expense, and one bill with several friends outside any group
+- Save a group's usual split as the default for new expenses
+- Recurring expenses: weekly, every 2 weeks, monthly or yearly
 - About 45 categories with icons, guessed from the description
-- Simplified debts (fewest payments), switchable per group
-- Each friend's balance across every group you share
+- Simplified debts: the fewest payments to settle everything, switchable per group
 
-**Notifications and payments**
-- Everyone in an expense is told when it's added, changed or deleted, commented on or paid, except whoever did it
-- Phone notifications, email, and a bell with unread count in the app
-- Remind someone who owes you (once a day)
-- Receipt photos on expenses (private to the group)
+**Money**
+- Any currency on any expense, with balances kept per currency
+- Today's exchange rates to convert an expense, and an overall total in your own currency
 - Pay with UPI, PayPal or Venmo straight from Settle up
+- Monthly spending by category, a six-month chart and optional budgets
+- Group totals: who paid what, each person's share, month by month
 
 **Together**
-- Notes and comments on expenses
-- Full change history, and restoring deleted expenses
-- Activity feed across all friends and groups
-- Invite links and QR codes to join a group or a friend ledger
-- Group cover photos and a shared whiteboard
-- Profile photo, name, default currency, email, password, delete account
-- Live updates on every device; installable on phones
+- Find friends by name; invite anyone else with a link or QR code
+- Phone notifications and emails when you're added to an expense, it changes, someone comments,
+  or someone reminds you to pay
+- Comments on expenses, alongside a full history of every change
+- Receipt photos (private to the group), notes, group cover photos and a shared whiteboard
+- Restore deleted expenses
+- An activity feed across all your friends and groups
 
-Everything runs on free tiers: **Supabase** for accounts and the database,
-**Netlify** for the website, and **Expo** to build the Android app.
+**Everywhere**
+- Sign in with email or Google
+- Android app, plus a website that installs on any phone's Home Screen
+- Works offline: your balances stay visible, and changes sync when you're back online
+- Light and dark themes
+- Export a group as a spreadsheet, or download a backup of all your data
+
+## How it's built
+
+| Part | What it uses |
+|---|---|
+| App (web, Android, iPhone) | [Expo](https://expo.dev) and React Native, written in TypeScript. One code base in `mobile/` |
+| Accounts, database, photos | [Supabase](https://supabase.com): Postgres with row level security, so people only see groups they belong to |
+| Notifications and email | The `notify` Supabase Edge Function: web push, Expo push for the app, and email through Brevo |
+| Website hosting | [Netlify](https://netlify.com), rebuilt automatically from `main` |
+| Android builds | Expo's build service, started from GitHub Actions |
+
+Everything runs on free plans.
+
+## Run it on your computer
+
+You need [Node.js](https://nodejs.org) 22 and [Git](https://git-scm.com).
+
+```bash
+git clone https://github.com/Jugalpatel3981/Evenly-.git
+cd Evenly-/mobile
+npm install
+npx expo start --web
+```
+
+Evenly opens at <http://localhost:8081>. It uses the live database, so anything you add is real.
+To sign in with Google locally, add `http://localhost:8081/**` to Supabase's redirect URLs (see below).
+
+Checks before shipping a change:
+
+```bash
+npx tsc --noEmit      # type check
+npx expo lint         # lint
+```
+
+## Setting up your own copy
+
+### 1. Database
+1. Create a free project at <https://supabase.com>.
+2. In **SQL Editor**, run the whole of [`supabase/schema.sql`](supabase/schema.sql). It's safe to run
+   again after every update, and your data stays.
+3. Put your project's URL and **anon key** (Project Settings → API) in
+   [`mobile/src/lib/supabase.ts`](mobile/src/lib/supabase.ts). The anon key is meant to be public:
+   row level security protects the data.
+
+### 2. Sign-in
+In **Authentication → URL Configuration**, set **Site URL** to your website's address, and add these
+**Redirect URLs**: your site followed by `/**`, and `evenly://**` for the Android app.
+
+For Google sign-in, create an OAuth client in Google Cloud (Web application), with Supabase's callback
+URL as the redirect URI, then paste its ID and secret under **Authentication → Sign In / Providers → Google**.
+
+### 3. Notifications and email
+1. **Edge Functions**: deploy [`supabase/functions/notify/index.ts`](supabase/functions/notify/index.ts)
+   as a function named `notify`, with **Verify JWT** turned off.
+2. **Edge Functions → Secrets**: add `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` (web push),
+   `BREVO_API_KEY` and `MAIL_FROM` (email), and `APP_URL` (your website).
+3. Open `https://<project>.supabase.co/functions/v1/notify` in a browser to see what's set up.
+
+The public VAPID key also goes in [`mobile/src/lib/push.web.ts`](mobile/src/lib/push.web.ts).
+
+### 4. Website
+Connect the repository to Netlify. [`netlify.toml`](netlify.toml) already has the build settings, and
+every push to `main` goes live in a few minutes.
+
+### 5. Android app
+1. Make a free account at <https://expo.dev> and create an access token
+   (Account settings → Access tokens).
+2. In GitHub, add it as a repository secret named `EXPO_TOKEN`
+   (Settings → Secrets and variables → Actions).
+3. Run **Actions → Build Android app**. **preview** makes an `.apk` to install on a phone;
+   **production** makes an `.aab` for the Play Store.
 
 ## Where things are
 
-- `mobile/`: the app, built with Expo and React Native. The same code is the website (Netlify builds it,
-  see `netlify.toml`) and the Android and iPhone app (`.github/workflows/android.yml` builds it on Expo).
-  See `mobile/README.md`.
-- `supabase/`: the database (`schema.sql`, safe to run again after every update) and the `notify` function
-  that sends phone notifications and emails.
-- `index.html`, `js/`, `styles.css`, `sw.js`, `vendor/`: the first, plain-JavaScript version of the website,
-  kept for reference. `tests/` holds its money tests and the `notify` function's tests.
-
-## Setup (about 10 minutes, free)
-
-### 1. Create the database
-1. Sign up at <https://supabase.com> and click **New project**. Pick any name
-   and a database password, and choose the region closest to you (for example Mumbai).
-2. When the project is ready, open **SQL Editor > New query**, paste the whole of
-   [`supabase/schema.sql`](supabase/schema.sql), and click **Run**.
-   You should see "Success. No rows returned".
-
-### 2. Connect the app
-1. In Supabase, open **Project Settings > API**, or click the **Connect** button.
-2. Copy the **Project URL** and the **anon / publishable key** into `config.js`.
-   The anon key is safe to publish. The database's row level security only lets
-   people see groups they belong to.
-
-### 3. Put it online
-Choose one option:
-- **Netlify Drop (easiest):** go to <https://app.netlify.com/drop> and drag this
-  whole folder onto the page. You get a link like `https://evenly-123.netlify.app`.
-- **GitHub Pages:** push this folder to a GitHub repo, then go to
-  **Settings > Pages > Deploy from branch**.
-- **Vercel / Cloudflare Pages:** import the repo. No build command is needed.
-
-### 4. Tell Supabase your site's address
-In Supabase, open **Authentication > URL Configuration** and set **Site URL**
-to your site's link. Add the same link under **Redirect URLs**. Confirmation and
-password-reset emails then bring people back to your app.
-
-That's it. Open your link, create an account, confirm your email, and make a group.
-
-## Installing on phones
-Send friends your link. Then:
-- **Android (Chrome):** open the link and tap **Install app** when it pops up, or use the **⋮** menu > **Install app** / **Add to Home screen**.
-- **iPhone (Safari):** open the link, tap the **Share** button, then **Add to Home Screen**. (On iPhone, this only works from Safari.)
-- **Computer (Chrome or Edge):** click the install icon at the right of the address bar.
-
-Evenly then opens full-screen from its own icon, like any other app. Updates
-arrive automatically: friends never need to reinstall.
-
-## How invites work
-When you add a friend to a group with their email, they're "invited". As soon
-as they sign up (or sign in) with that email and confirm it, the group appears
-in their account. Someone added by name only is still part of the splits; they
-just can't sign in to see them.
-
-## Updating
-This repo is connected to Netlify: every push to `main` goes live automatically
-in about 30 seconds. When an update changes the database, run
-`supabase/schema.sql` again in the Supabase SQL Editor. It's safe to re-run,
-and your data stays.
+| Folder | What's in it |
+|---|---|
+| `mobile/src/app/` | The screens: tabs, group and friend pages, forms |
+| `mobile/src/lib/` | Data, maths and services: `money.ts` (splits and balances), `store.ts` (loading, offline queue), `rates.ts`, `push.ts` |
+| `mobile/src/ui/` | Shared building blocks: theme, buttons, lists, charts, the split editor |
+| `mobile/public/` | Website-only files: service worker, Home Screen manifest, icons, privacy policy |
+| `supabase/` | `schema.sql` (tables, security rules, functions) and the `notify` function |
+| `docs/screenshots/` | The pictures in this README |
+| `index.html`, `js/`, `styles.css`, `tests/` | The first version of the website, written in plain JavaScript, kept for reference |
 
 ## Good to know
-- **Email limits:** Supabase's built-in email sender only allows a few emails per
-  hour. That's fine for friends, but for more sign-ups connect a free SMTP service
-  (for example Resend or Brevo) under **Authentication > Emails > SMTP Settings**.
-- **Free project pausing:** Supabase pauses free projects after a week with no
-  activity. Click **Restore** in the dashboard and your data is still there.
-- **Testing without email confirmation:** you can turn off **Confirm email**
-  under **Authentication > Sign In / Providers > Email**. Leave it on for
-  real use: invites only link to confirmed emails.
 
-## Notifications setup
-Notifications are created in the database and delivered by the `notify` Edge Function
-(`supabase/functions/notify/index.ts`).
-1. Run `supabase/schema.sql` in the SQL Editor (it enables `pg_net` and the delivery trigger).
-2. Supabase > Edge Functions > Deploy a new function > Via Editor. Name it `notify`, paste
-   `index.ts`, deploy, then turn off **Verify JWT** in the function's settings.
-3. Edge Functions > Secrets: add `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `BREVO_API_KEY`,
-   `MAIL_FROM` (a sender verified in Brevo) and `APP_URL`.
-4. Open `https://<project>.supabase.co/functions/v1/notify` in a browser: it reports what is set up.
+- **Free database pausing:** Supabase pauses a free project after a week with no use. Click **Restore**
+  in its dashboard and everything is back.
+- **Email limits:** Supabase's built-in sender only sends a few emails an hour. Evenly's own emails go
+  through Brevo (300 a day free).
+- **iPhone:** add the website to the Home Screen from Safari (Share → Add to Home Screen) to get
+  notifications on iPhone.
 
-The public VAPID key also goes in `config.js`. Brevo's free plan sends 300 emails a day;
-`RESEND_API_KEY` works instead if you own a domain verified in Resend.
+## Privacy
 
-## Tests
-Run `npm test` (Node 20+) to check the split and balance maths, and
-`EVENLY_TEST=1 deno test -A --node-modules-dir=none tests/notify.deno.test.ts` for the notify function.
-
-## Files
-| File | What it is |
-|---|---|
-| `index.html` | The page |
-| `js/main.js` | Startup, sign-in, button handling |
-| `js/views.js`, `js/sheets.js` | Screens and forms |
-| `js/state.js` | Data loading and derived balances |
-| `js/money.js` | Split and balance maths (tested in `tests/`) |
-| `js/categories.js`, `js/icons.js` | Categories and icons |
-| `js/push.js`, `js/messages.js` | Phone notifications and their wording |
-| `supabase/functions/notify/` | Sends phone notifications and emails |
-| `vendor/` | QR-code library |
-| `styles.css` | Look and feel (light and dark mode) |
-| `config.js` | Your Supabase URL and key |
-| `netlify.toml` | Netlify settings (no build step) |
-| `supabase/schema.sql` | Tables, security rules and functions |
-| `manifest.webmanifest`, `sw.js`, `icon-*.png` | Let phones install it like an app |
+Evenly only stores what it needs to work out balances, has no ads, and doesn't sell or share data.
+Read the full [privacy policy](https://evenly-tracker.netlify.app/privacy.html).

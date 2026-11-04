@@ -1,4 +1,4 @@
-// Splitwise-style categories: [key, label, icon] grouped under a parent with its colour token.
+// Expense categories: [key, label, icon] grouped under a parent with its colour token.
 export type Cat = {key: string; label: string; icon: string; parent: string; parentLabel: string; color: string};
 export const CATEGORY_GROUPS: {key: string; label: string; color: string; items: [string, string, string][]}[] = [
   {key: 'entertainment', label: 'Entertainment', color: 'ent', items: [

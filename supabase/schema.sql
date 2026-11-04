@@ -217,7 +217,7 @@ create policy "members manage expenses" on public.expenses for all
 
 
 -- =====================================================================
--- Phase 1 & 2: Splitwise features. Add-only: earlier app versions keep working.
+-- Phase 1 & 2: splitting and social features. Add-only: earlier app versions keep working.
 -- =====================================================================
 
 -- ---------- groups ----------
@@ -815,7 +815,7 @@ begin
 end $$;
 
 -- =====================================================================
--- Friends connect by email, like Splitwise.
+-- Friends connect by email.
 -- =====================================================================
 
 -- Anyone added with the email of an existing (confirmed) account is linked to it at once,
